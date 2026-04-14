@@ -7,9 +7,19 @@ type Props = {
   onLoad: (name: string) => void;
   onSaveCurrent: () => void;
   onNew: () => void;
+  onGenerate: () => void;
+  onSchedule: (name: string) => void;
+  scheduledNames: Set<string>;
 };
 
-export default function PipelineLibrary({ onLoad, onSaveCurrent, onNew }: Props) {
+export default function PipelineLibrary({
+  onLoad,
+  onSaveCurrent,
+  onNew,
+  onGenerate,
+  onSchedule,
+  scheduledNames,
+}: Props) {
   const activeName = useGraph((s) => s.activePipelineName);
   const setActivePipelineName = useGraph((s) => s.setActivePipelineName);
   const [templates, setTemplates] = useState<string[]>([]);
@@ -93,6 +103,15 @@ export default function PipelineLibrary({ onLoad, onSaveCurrent, onNew }: Props)
           + Save
         </button>
       </div>
+      <div className="pipeline-lib__generate-row">
+        <button
+          className="pipeline-lib__generate"
+          onClick={onGenerate}
+          title="Describe what you want — Claude designs the pipeline"
+        >
+          ✨ Generate from prompt
+        </button>
+      </div>
       {loading && <div className="sidebar__status">loading…</div>}
       {!loading && templates.length === 0 && (
         <div className="sidebar__status">(no templates yet)</div>
@@ -112,6 +131,25 @@ export default function PipelineLibrary({ onLoad, onSaveCurrent, onNew }: Props)
             >
               <span className="pipeline-lib__icon">{isActive ? "●" : "▸"}</span>
               <span className="pipeline-lib__name">{name}</span>
+              <button
+                className={
+                  "pipeline-lib__schedule" +
+                  (scheduledNames.has(name)
+                    ? " pipeline-lib__schedule--on"
+                    : "")
+                }
+                title={
+                  scheduledNames.has(name)
+                    ? `Edit schedule for "${name}"`
+                    : `Add schedule for "${name}"`
+                }
+                onClick={(e) => {
+                  e.stopPropagation();
+                  onSchedule(name);
+                }}
+              >
+                ⏰
+              </button>
               <button
                 className="pipeline-lib__delete"
                 title={`Delete "${name}"`}

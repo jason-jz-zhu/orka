@@ -62,7 +62,7 @@ export default function PipelineNodeCard({ node, onOpen }: Props) {
             onOpen();
           }}
         >
-          Open in Pipeline
+          Open in Studio
         </button>
       </div>
     </div>

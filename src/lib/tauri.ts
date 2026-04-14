@@ -117,6 +117,28 @@ async function browserFallback<T>(
   if (cmd === "save_template") return undefined as unknown as T;
   if (cmd === "load_template") return "{}" as unknown as T;
   if (cmd === "delete_template") return undefined as unknown as T;
+  if (cmd === "write_output_file") return "/tmp/orka-fake.md" as unknown as T;
+  if (cmd === "outputs_dir") return "/tmp/orka-outputs" as unknown as T;
+  if (cmd === "list_schedules") return [] as unknown as T;
+  if (cmd === "get_schedule") return null as unknown as T;
+  if (cmd === "save_schedule") return undefined as unknown as T;
+  if (cmd === "delete_schedule") return undefined as unknown as T;
+  if (cmd === "os_notify") return undefined as unknown as T;
+  if (cmd === "generate_pipeline")
+    return {
+      pipeline: {
+        nodes: [
+          {
+            id: "n1",
+            type: "chat",
+            position: { x: 60, y: 60 },
+            data: { prompt: "Browser-fallback stub chat" },
+          },
+        ],
+        edges: [],
+      },
+      raw: "(browser fallback)",
+    } as unknown as T;
   if (cmd === "onboarding_status")
     return {
       claude_installed: true,

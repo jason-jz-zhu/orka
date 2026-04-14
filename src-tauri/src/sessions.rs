@@ -920,43 +920,51 @@ fn run_applescript(script: &str) -> Option<String> {
 /// error message.
 #[cfg(target_os = "macos")]
 fn focus_terminal_tab_by_tty(tty: &str) -> Result<String, String> {
-    // Terminal.app
+    // Terminal.app — only inspect if it's already running, and only call
+    // `activate` AFTER a matching tab is found. Activating unconditionally
+    // would flash Terminal to the foreground even when the session lives
+    // in some other app (VSCode, iTerm2, etc.).
     let tapp_script = format!(
-        r#"tell application "Terminal"
-    activate
-    repeat with w in windows
-        repeat with t in tabs of w
-            if tty of t is "{tty}" then
-                set selected of t to true
-                set index of w to 1
-                return "ok"
-            end if
+        r#"if application "Terminal" is running then
+    tell application "Terminal"
+        repeat with w in windows
+            repeat with t in tabs of w
+                if tty of t is "{tty}" then
+                    activate
+                    set selected of t to true
+                    set index of w to 1
+                    return "ok"
+                end if
+            end repeat
         end repeat
-    end repeat
-    return "not-found"
-end tell"#
+    end tell
+end if
+return "not-found""#
     );
     if let Some(r) = run_applescript(&tapp_script) {
         if r == "ok" {
             return Ok("Terminal".into());
         }
     }
-    // iTerm2
+    // iTerm2 — same pattern. `application "iTerm2" is running` guard avoids
+    // auto-launching iTerm2 just because we reference it.
     let iterm_script = format!(
-        r#"tell application "iTerm2"
-    repeat with w in windows
-        repeat with t in tabs of w
-            repeat with s in sessions of t
-                if tty of s is "{tty}" then
-                    select t
-                    activate
-                    return "ok"
-                end if
+        r#"if application "iTerm2" is running then
+    tell application "iTerm2"
+        repeat with w in windows
+            repeat with t in tabs of w
+                repeat with s in sessions of t
+                    if tty of s is "{tty}" then
+                        select t
+                        activate
+                        return "ok"
+                    end if
+                end repeat
             end repeat
         end repeat
-    end repeat
-    return "not-found"
-end tell"#
+    end tell
+end if
+return "not-found""#
     );
     if let Some(r) = run_applescript(&iterm_script) {
         if r == "ok" {

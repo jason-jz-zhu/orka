@@ -1,9 +1,14 @@
-import { useEffect } from "react";
+import { useEffect, useState } from "react";
 import { Handle, Position, type NodeProps } from "@xyflow/react";
+import ReactMarkdown from "react-markdown";
+import remarkGfm from "remark-gfm";
+import { save as saveDialog } from "@tauri-apps/plugin-dialog";
 import { invokeCmd, listenEvent } from "../lib/tauri";
 import { parseLine } from "../lib/stream-parser";
 import { buildContext, composePrompt } from "../lib/context";
 import { useGraph, type OrkaNode } from "../lib/graph-store";
+import { alertDialog } from "../lib/dialogs";
+import { waitForDone } from "../lib/run-all";
 
 
 type Props = NodeProps<Extract<OrkaNode, { type: "chat" | "agent" }>> & {
@@ -12,6 +17,7 @@ type Props = NodeProps<Extract<OrkaNode, { type: "chat" | "agent" }>> & {
 
 export default function ChatNode({ id, data, variant = "chat" }: Props) {
   const update = useGraph((s) => s.updateNodeData);
+  const [replyText, setReplyText] = useState("");
 
   // Subscribe to stream + done events from the Rust side (or browser fallback).
   useEffect(() => {
@@ -34,6 +40,10 @@ export default function ChatNode({ id, data, variant = "chat" }: Props) {
             // Silent — tool I/O stays out of the node output.
           } else if (ev.kind === "result") {
             update(id, { costUsd: ev.costUsd });
+          } else if (ev.kind === "system") {
+            // Capture the session id Claude assigned to this run so the
+            // user can ↪ Continue the conversation by --resuming it.
+            if (ev.sessionId) update(id, { lastSessionId: ev.sessionId });
           }
         }
       });
@@ -61,7 +71,56 @@ export default function ChatNode({ id, data, variant = "chat" }: Props) {
     };
   }, [id, update]);
 
+  async function exportOutput() {
+    if (!data.output) return;
+    const ts = new Date().toISOString().replace(/[:.]/g, "-").slice(0, 19);
+    const defaultName = `${id}-${ts}.md`;
+    const path = await saveDialog({
+      defaultPath: defaultName,
+      filters: [
+        { name: "Markdown", extensions: ["md"] },
+        { name: "Text", extensions: ["txt"] },
+        { name: "All", extensions: ["*"] },
+      ],
+      title: "Export node output",
+    });
+    if (!path) return;
+    try {
+      const written = await invokeCmd<string>("write_output_file", {
+        path,
+        content: data.output,
+      });
+      console.log(`[orka:export] wrote ${written}`);
+    } catch (e) {
+      await alertDialog(`Export failed: ${e}`);
+    }
+  }
+
   async function run() {
+    // Wait for any upstream chat/agent that's still running so this node
+    // doesn't kick off with an empty/stale context. Mirrors what Run All
+    // does sequentially.
+    const { nodes: n0, edges: e0 } = useGraph.getState();
+    const upstreamRunning = e0
+      .filter((e) => e.target === id)
+      .map((e) => n0.find((x) => x.id === e.source))
+      .filter(
+        (u): u is OrkaNode =>
+          !!u &&
+          (u.type === "chat" || u.type === "agent") &&
+          (u.data as { running?: boolean }).running === true
+      );
+    if (upstreamRunning.length > 0) {
+      update(id, {
+        running: true,
+        output: `(waiting for upstream: ${upstreamRunning
+          .map((u) => u.id)
+          .join(", ")})`,
+        toolCount: 0,
+      });
+      await Promise.all(upstreamRunning.map((u) => waitForDone(u.id)));
+    }
+
     update(id, { running: true, output: "", toolCount: 0 });
     try {
       const { nodes, edges } = useGraph.getState();
@@ -77,6 +136,35 @@ export default function ChatNode({ id, data, variant = "chat" }: Props) {
     } catch (e) {
       update(id, {
         output: `Error: ${String(e)}`,
+        running: false,
+      });
+    }
+  }
+
+  async function continueConversation() {
+    const reply = replyText.trim();
+    if (!reply || !data.lastSessionId || data.running) return;
+    // Append user reply to the visible output as a separator turn so the
+    // user sees their message above the assistant's incoming response.
+    const prev = (data as { output?: string }).output ?? "";
+    const separator = prev.endsWith("\n") ? "" : "\n\n";
+    update(id, {
+      running: true,
+      output: prev + separator + `\n---\n\n**👤 you:** ${reply}\n\n**🤖 claude:**\n\n`,
+      toolCount: 0,
+    });
+    setReplyText("");
+    try {
+      const cmd = variant === "agent" ? "run_agent_node" : "run_node";
+      await invokeCmd(cmd, {
+        id,
+        prompt: reply,
+        resumeId: data.lastSessionId,
+        addDirs: [],
+      });
+    } catch (e) {
+      update(id, {
+        output: prev + `\n\n[continue error] ${String(e)}`,
         running: false,
       });
     }
@@ -133,14 +221,50 @@ export default function ChatNode({ id, data, variant = "chat" }: Props) {
             ${data.costUsd.toFixed(4)}
           </span>
         )}
+        {data.output && !data.running && (
+          <button
+            className="chat-node__export"
+            onClick={exportOutput}
+            title="Export this node's output to a file"
+          >
+            ⤓ Export
+          </button>
+        )}
       </div>
       {data.output && (
-        <pre
-          className="chat-node__output nodrag nowheel"
+        <div
+          className="chat-node__output chat-node__output--md nodrag nowheel"
           onWheelCapture={(e) => e.stopPropagation()}
         >
-          {data.output}
-        </pre>
+          <ReactMarkdown remarkPlugins={[remarkGfm]}>
+            {data.output}
+          </ReactMarkdown>
+        </div>
+      )}
+      {data.lastSessionId && data.output && !data.running && (
+        <div className="chat-node__reply nodrag">
+          <textarea
+            className="chat-node__reply-input nowheel"
+            placeholder="Reply to continue this conversation…"
+            value={replyText}
+            onChange={(e) => setReplyText(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) {
+                e.preventDefault();
+                continueConversation();
+              }
+            }}
+            rows={2}
+          />
+          <button
+            className="chat-node__reply-send"
+            onClick={continueConversation}
+            disabled={!replyText.trim()}
+            title="Continue conversation (Cmd/Ctrl+Enter)"
+          >
+            ↪ Continue
+          </button>
+        </div>
       )}
       <Handle type="source" position={Position.Right} />
     </div>

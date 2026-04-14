@@ -6,23 +6,34 @@ import {
   type NodeTypes,
 } from "@xyflow/react";
 import "@xyflow/react/dist/style.css";
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useGraph } from "./lib/graph-store";
 import ChatNode from "./nodes/ChatNode";
 import AgentNode from "./nodes/AgentNode";
 import KnowledgeBaseNode from "./nodes/KnowledgeBaseNode";
 import SessionNode from "./nodes/SessionNode";
+import OutputNode from "./nodes/OutputNode";
 import WorkspaceSwitcher from "./components/WorkspaceSwitcher";
 import PipelineLibrary from "./components/PipelineLibrary";
 import SessionDashboard from "./components/SessionDashboard";
 import StatusBar from "./components/StatusBar";
 import { usePersistence } from "./lib/persistence";
-import { runAll } from "./lib/run-all";
+import { runAll, requestRunAllSkip } from "./lib/run-all";
 import { invokeCmd } from "./lib/tauri";
 import { alertDialog, confirmDialog, promptDialog } from "./lib/dialogs";
 import OnboardingModal, {
   hasCompletedOnboarding,
 } from "./components/OnboardingModal";
+import GeneratePipelineModal from "./components/GeneratePipelineModal";
+import ScheduleModal from "./components/ScheduleModal";
+import {
+  listSchedules,
+  saveSchedule,
+  refreshNextRun,
+  osNotify,
+  type Schedule,
+} from "./lib/schedules";
+import { playReadyPing } from "./lib/sound";
 import "./App.css";
 
 const nodeTypes: NodeTypes = {
@@ -30,6 +41,7 @@ const nodeTypes: NodeTypes = {
   agent: AgentNode as any,
   kb: KnowledgeBaseNode as any,
   session: SessionNode as any,
+  output: OutputNode as any,
 };
 
 type Tab = "pipeline" | "monitor";
@@ -45,6 +57,7 @@ export default function App() {
     addChatNode,
     addAgentNode,
     addKBNode,
+    addOutputNode,
     setGraph,
     activePipelineName,
     setActivePipelineName,
@@ -55,12 +68,26 @@ export default function App() {
   const [showOnboarding, setShowOnboarding] = useState(
     () => !hasCompletedOnboarding()
   );
+  const [showGenerate, setShowGenerate] = useState(false);
+  const [scheduleFor, setScheduleFor] = useState<string | null>(null);
+  const [scheduledNames, setScheduledNames] = useState<Set<string>>(
+    () => new Set()
+  );
+  const scheduleRunningRef = useRef(false);
+  const [runPaused, setRunPaused] = useState(false);
 
   async function onRunAll() {
     setRunning(true);
     setRunStatus("running…");
     try {
-      const r = await runAll();
+      const r = await runAll((p) => {
+        setRunPaused(!!p.pausedForReply);
+        if (p.currentId) {
+          setRunStatus(
+            `${p.pausedForReply ? "⏸" : "▶"} ${p.label} · ${p.index}/${p.total}`
+          );
+        }
+      });
       const parts: string[] = [];
       if (r.ran.length) parts.push(`${r.ran.length} ran`);
       if (r.skipped.length) parts.push(`${r.skipped.length} skipped`);
@@ -69,6 +96,7 @@ export default function App() {
       setTimeout(() => setRunStatus(null), 6000);
     } finally {
       setRunning(false);
+      setRunPaused(false);
     }
   }
 
@@ -80,6 +108,11 @@ export default function App() {
         delete d.running;
         delete d.costUsd;
         delete d.toolCount;
+        delete d.lastSessionId;
+        // OutputNode runtime fields:
+        delete d.lastWrittenPath;
+        delete d.lastWrittenAt;
+        delete d.lastError;
         return { ...n, data: d };
       }),
       edges,
@@ -152,6 +185,143 @@ export default function App() {
     }
   }
 
+  async function runScheduledPipeline(target: Schedule) {
+    if (scheduleRunningRef.current) return;
+    const startedAt = Date.now();
+    let ok = false;
+    let error: string | null = null;
+    let outputPath: string | null = null;
+
+    // Q1: skip if user is editing a different named pipeline.
+    const cur = useGraph.getState();
+    const editingDifferent =
+      cur.nodes.length > 0 &&
+      cur.activePipelineName !== null &&
+      cur.activePipelineName !== target.pipeline_name;
+
+    if (editingDifferent) {
+      const skipped: Schedule = {
+        ...target,
+        last_run_at: startedAt,
+        history: [
+          {
+            ran_at: startedAt,
+            ok: false,
+            duration_ms: 0,
+            error: `skipped (editing "${cur.activePipelineName}")`,
+            output_path: null,
+          },
+          ...target.history.slice(0, 19),
+        ],
+      };
+      await saveSchedule(refreshNextRun(skipped));
+      setRunStatus(
+        `⏰ skipped "${target.pipeline_name}" — you're editing "${cur.activePipelineName}"`
+      );
+      setTimeout(() => setRunStatus(null), 6000);
+      return;
+    }
+
+    scheduleRunningRef.current = true;
+    setRunStatus(`⏰ running scheduled "${target.pipeline_name}"…`);
+    try {
+      const raw = await invokeCmd<string>("load_template", {
+        name: target.pipeline_name,
+      });
+      const parsed = JSON.parse(raw);
+      if (!Array.isArray(parsed.nodes) || !Array.isArray(parsed.edges)) {
+        throw new Error("template is malformed");
+      }
+      setGraph(parsed.nodes, parsed.edges);
+      setActivePipelineName(target.pipeline_name);
+      // Let React commit + nodes register before we run.
+      await new Promise((r) => setTimeout(r, 50));
+      const result = await runAll();
+      ok = result.failed.length === 0;
+      if (!ok) {
+        error = result.failed.map((f) => `${f.id}: ${f.error}`).join("; ");
+      }
+      const out = useGraph
+        .getState()
+        .nodes.find(
+          (n) =>
+            n.type === "output" &&
+            (n.data as { lastWrittenPath?: string }).lastWrittenPath
+        );
+      if (out) {
+        outputPath =
+          (out.data as { lastWrittenPath?: string }).lastWrittenPath ?? null;
+      }
+    } catch (e) {
+      ok = false;
+      error = String(e);
+    } finally {
+      scheduleRunningRef.current = false;
+    }
+
+    const updated: Schedule = {
+      ...target,
+      last_run_at: startedAt,
+      history: [
+        {
+          ran_at: startedAt,
+          ok,
+          duration_ms: Date.now() - startedAt,
+          error,
+          output_path: outputPath,
+        },
+        ...target.history.slice(0, 19),
+      ],
+    };
+    await saveSchedule(refreshNextRun(updated));
+
+    if (target.notify) {
+      await osNotify(
+        ok
+          ? `✓ ${target.pipeline_name} done`
+          : `✗ ${target.pipeline_name} failed`,
+        ok
+          ? outputPath
+            ? `${((Date.now() - startedAt) / 1000).toFixed(1)}s · ${outputPath}`
+            : `${((Date.now() - startedAt) / 1000).toFixed(1)}s`
+          : (error ?? "Unknown error")
+      );
+    }
+    if (target.sound && ok) playReadyPing();
+    setRunStatus(
+      ok
+        ? `⏰ "${target.pipeline_name}" done`
+        : `⏰ "${target.pipeline_name}" failed: ${error}`
+    );
+    setTimeout(() => setRunStatus(null), 6000);
+  }
+
+  async function tickSchedules() {
+    if (scheduleRunningRef.current) return;
+    let list: Schedule[] = [];
+    try {
+      list = await listSchedules();
+    } catch {
+      return;
+    }
+    setScheduledNames(new Set(list.map((s) => s.pipeline_name)));
+    const now = Date.now();
+    const due = list.filter(
+      (s) => s.enabled && s.next_run_at !== null && s.next_run_at! <= now
+    );
+    if (!due.length) return;
+    due.sort((a, b) => (a.next_run_at ?? 0) - (b.next_run_at ?? 0));
+    await runScheduledPipeline(due[0]);
+  }
+
+  // Tick every 30s to check for due schedules. Also fires once on mount.
+  useEffect(() => {
+    tickSchedules();
+    const t = setInterval(tickSchedules, 30_000);
+    return () => clearInterval(t);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
   async function onLoadTemplate() {
     try {
       const names = await invokeCmd<string[]>("list_templates");
@@ -182,7 +352,7 @@ export default function App() {
             className={"tabs__item" + (tab === "monitor" ? " tabs__item--active" : "")}
             onClick={() => setTab("monitor")}
           >
-            Monitor
+            Live
           </button>
           <button
             role="tab"
@@ -190,7 +360,7 @@ export default function App() {
             className={"tabs__item" + (tab === "pipeline" ? " tabs__item--active" : "")}
             onClick={() => setTab("pipeline")}
           >
-            Pipeline
+            Studio
           </button>
         </div>
         {tab === "pipeline" && (
@@ -213,6 +383,7 @@ export default function App() {
             <button onClick={() => addChatNode()}>+ Chat</button>
             <button onClick={() => addAgentNode()}>+ Agent</button>
             <button onClick={() => addKBNode()}>+ KB</button>
+            <button onClick={() => addOutputNode()}>+ Output</button>
             <div className="toolbar__divider" />
             <button onClick={onRunAll} disabled={running} className="toolbar__primary">
               {running ? "Running…" : "▶ Run All"}
@@ -220,6 +391,15 @@ export default function App() {
             <button onClick={onSaveTemplate}>Save</button>
             <button onClick={onLoadTemplate}>Load</button>
             {runStatus && <span className="toolbar__status">{runStatus}</span>}
+            {runPaused && (
+              <button
+                className="toolbar__skip"
+                onClick={requestRunAllSkip}
+                title="Skip the current pause and proceed to the next node"
+              >
+                Skip →
+              </button>
+            )}
           </>
         )}
         <span className="toolbar__title">Orka</span>
@@ -231,6 +411,9 @@ export default function App() {
           onLoad={loadTemplateByName}
           onSaveCurrent={onSaveTemplate}
           onNew={onNewPipeline}
+          onGenerate={() => setShowGenerate(true)}
+          onSchedule={(name) => setScheduleFor(name)}
+          scheduledNames={scheduledNames}
         />
         <div className="canvas">
           <ReactFlow
@@ -258,6 +441,27 @@ export default function App() {
       {tab === "pipeline" && <StatusBar />}
       {showOnboarding && (
         <OnboardingModal onClose={() => setShowOnboarding(false)} />
+      )}
+      {showGenerate && (
+        <GeneratePipelineModal
+          onClose={() => setShowGenerate(false)}
+          onApplied={() => {
+            setShowGenerate(false);
+            setTab("pipeline");
+            setRunStatus("✨ pipeline ready — click ▶ Run All to execute in order");
+            setTimeout(() => setRunStatus(null), 8000);
+          }}
+        />
+      )}
+      {scheduleFor && (
+        <ScheduleModal
+          pipelineName={scheduleFor}
+          onClose={() => {
+            setScheduleFor(null);
+            // Refresh indicator immediately after the modal closes.
+            tickSchedules();
+          }}
+        />
       )}
     </div>
   );

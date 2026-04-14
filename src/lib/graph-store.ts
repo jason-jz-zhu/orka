@@ -16,6 +16,10 @@ export type ChatNodeData = {
   running: boolean;
   costUsd?: number;
   resumeSessionId?: string;
+  /** Latest session id observed from the stream-json `system init` event.
+   * Used to chain follow-up "↪ Continue" turns via `--resume`. Runtime only;
+   * stripped on template save. */
+  lastSessionId?: string;
   toolCount?: number;
 };
 
@@ -33,11 +37,28 @@ export type SessionNodeData = {
   live: boolean;
 };
 
+export type OutputFormat = "markdown" | "json" | "text";
+export type OutputMergeMode = "concat" | "list" | "json";
+export type OutputNodeData = {
+  filename: string;            // e.g. "report.md" — relative or absolute
+  dir: string;                 // absolute or empty (= default outputs dir)
+  format: OutputFormat;
+  mergeMode: OutputMergeMode;  // how to combine multiple upstreams
+  template: string;            // optional, e.g. "# {nodeId}\n\n{content}"
+  overwrite: boolean;          // false = append timestamp suffix
+  // Runtime (not persisted in templates):
+  lastWrittenPath?: string;
+  lastWrittenAt?: number;
+  lastError?: string;
+  running?: boolean;
+};
+
 export type OrkaNode =
   | Node<ChatNodeData, "chat">
   | Node<AgentNodeData, "agent">
   | Node<KBNodeData, "kb">
-  | Node<SessionNodeData, "session">;
+  | Node<SessionNodeData, "session">
+  | Node<OutputNodeData, "output">;
 
 type GraphState = {
   nodes: OrkaNode[];
@@ -49,6 +70,7 @@ type GraphState = {
   addChatNode: (init?: Partial<ChatNodeData>) => string;
   addAgentNode: (init?: Partial<ChatNodeData>) => string;
   addKBNode: () => string;
+  addOutputNode: () => string;
   addSessionNode: (info: {
     sessionId: string;
     path: string;
@@ -127,6 +149,24 @@ export const useGraph = create<GraphState>((set, get) => ({
       type: "kb",
       position: stagger(),
       data: { files: [], dir: "" },
+    };
+    set({ nodes: [...get().nodes, node] });
+    return id;
+  },
+  addOutputNode: () => {
+    const id = nextId();
+    const node: OrkaNode = {
+      id,
+      type: "output",
+      position: stagger(),
+      data: {
+        filename: "report.md",
+        dir: "",
+        format: "markdown",
+        mergeMode: "concat",
+        template: "",
+        overwrite: false,
+      },
     };
     set({ nodes: [...get().nodes, node] });
     return id;

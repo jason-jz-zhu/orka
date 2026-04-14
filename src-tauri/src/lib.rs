@@ -2,6 +2,8 @@ mod graph;
 mod kb;
 mod node_runner;
 mod onboarding;
+mod pipeline_gen;
+mod schedules;
 mod sessions;
 mod workspace;
 
@@ -129,6 +131,44 @@ fn focus_session_terminal(path: String) -> Result<String, String> {
 #[tauri::command]
 fn onboarding_status() -> onboarding::OnboardingStatus {
     onboarding::onboarding_status()
+}
+
+#[tauri::command]
+async fn generate_pipeline(
+    requirement: String,
+) -> Result<pipeline_gen::GenerateResult, String> {
+    pipeline_gen::generate_pipeline(&requirement).await
+}
+
+/// Write text to a file. Creates parent dirs as needed. Returns the resolved
+/// absolute path so the UI can display + offer "reveal in Finder".
+#[tauri::command]
+async fn write_output_file(path: String, content: String) -> Result<String, String> {
+    let p = std::path::PathBuf::from(&path);
+    if let Some(parent) = p.parent() {
+        if !parent.as_os_str().is_empty() {
+            tokio::fs::create_dir_all(parent)
+                .await
+                .map_err(|e| format!("mkdir {}: {e}", parent.display()))?;
+        }
+    }
+    tokio::fs::write(&p, content)
+        .await
+        .map_err(|e| format!("write {}: {e}", p.display()))?;
+    let abs = std::fs::canonicalize(&p)
+        .unwrap_or(p)
+        .to_string_lossy()
+        .to_string();
+    Ok(abs)
+}
+
+/// Default output directory for the active workspace's pipelines.
+/// Lazy-creates `~/OrkaCanvas/<workspace>/outputs/` and returns its absolute path.
+#[tauri::command]
+fn outputs_dir() -> Result<String, String> {
+    let dir = workspace::workspace_root().join("outputs");
+    std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
+    Ok(dir.to_string_lossy().to_string())
 }
 
 #[tauri::command]
@@ -328,6 +368,14 @@ pub fn run() {
             debug_session,
             focus_session_terminal,
             onboarding_status,
+            generate_pipeline,
+            write_output_file,
+            outputs_dir,
+            schedules::list_schedules,
+            schedules::get_schedule,
+            schedules::save_schedule,
+            schedules::delete_schedule,
+            schedules::os_notify,
             open_in_vscode,
             open_in_terminal,
             list_workspaces,

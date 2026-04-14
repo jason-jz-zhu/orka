@@ -1,15 +1,18 @@
+import { memo } from "react";
 import type { SessionInfo } from "../lib/session-types";
 import { invokeCmd } from "../lib/tauri";
 import { alertDialog } from "../lib/dialogs";
+import { bump } from "../lib/perf";
 
 export type CardState = "generating" | "for-review" | "reviewed" | "errored" | "idle";
 
 function stateOf(session: SessionInfo, isReviewed: boolean): CardState {
   if (session.status === "errored") return "errored";
   if (session.status === "live") {
-    // Claude finished the current turn (last line = assistant with text)
-    // → waiting for user → "for review". Otherwise still mid-generation.
-    return session.awaiting_user ? "for-review" : "generating";
+    if (!session.awaiting_user) return "generating";
+    // Awaiting user — green CTA, but if you've already opened it this turn
+    // we dim it down so the inbox of "what to do next" stays readable.
+    return isReviewed ? "reviewed" : "for-review";
   }
   if (session.status === "done") return isReviewed ? "reviewed" : "for-review";
   return "idle";
@@ -44,9 +47,9 @@ type Props = {
   isReviewed: boolean;
   isPinned: boolean;
   selected: boolean;
-  onOpen: () => void;
-  onPin: () => void;
-  onUnpin: () => void;
+  onOpen: (s: SessionInfo) => void;
+  onPin: (s: SessionInfo) => void;
+  onUnpin: (s: SessionInfo) => void;
 };
 
 async function focusTerminal(path: string) {
@@ -62,7 +65,7 @@ async function focusTerminal(path: string) {
   }
 }
 
-export default function SessionCard({
+function SessionCardImpl({
   session,
   isReviewed,
   isPinned,
@@ -71,6 +74,7 @@ export default function SessionCard({
   onPin,
   onUnpin,
 }: Props) {
+  bump("SessionCard");
   const state = stateOf(session, isReviewed);
   const meta = STATE_META[state];
   // Primary content: the most recent *real* user ask (filters tool_results /
@@ -89,7 +93,7 @@ export default function SessionCard({
         `session-card session-card--${state}` +
         (selected ? " session-card--selected" : "")
       }
-      onClick={onOpen}
+      onClick={() => onOpen(session)}
     >
       <div className="session-card__head">
         <span className="session-card__status">
@@ -150,11 +154,12 @@ export default function SessionCard({
             // Any live session — whether Claude is still generating OR
             // awaiting user input — maps to "take me back to that terminal".
             // Non-live (done / errored) sessions open the transcript drawer.
+            // Either way, notify the parent so the FOR-REVIEW → REVIEWED
+            // transition fires.
             if (session.status === "live") {
               focusTerminal(session.path);
-              return;
             }
-            onOpen();
+            onOpen(session);
           }}
         >
           {primaryAction}
@@ -166,8 +171,8 @@ export default function SessionCard({
           }
           onClick={(e) => {
             e.stopPropagation();
-            if (isPinned) onUnpin();
-            else onPin();
+            if (isPinned) onUnpin(session);
+            else onPin(session);
           }}
           title={
             isPinned
@@ -181,3 +186,6 @@ export default function SessionCard({
     </div>
   );
 }
+
+const SessionCard = memo(SessionCardImpl);
+export default SessionCard;

@@ -1,76 +1,110 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 
-const STORAGE_KEY = "orka:reviewedSessionIds";
+const STORAGE_KEY = "orka:reviewedSessionMtimes";
 const BOOTSTRAP_KEY = "orka:reviewedBootstrapDone";
 
-function read(): Set<string> {
+/**
+ * We store reviewed state as `sessionId → modified_ms at the moment of
+ * review`. A session counts as "reviewed" only when its CURRENT mtime matches
+ * the stored one — i.e. nothing has changed since you looked at it.
+ *
+ * When Claude writes a new turn, mtime increases, the match fails, and the
+ * card flips back to FOR REVIEW naturally. No live "transition detection"
+ * needed; it survives Orka reloads.
+ */
+type ReviewedMap = Record<string, number>;
+
+function read(): ReviewedMap {
   try {
     const raw = localStorage.getItem(STORAGE_KEY);
-    if (!raw) return new Set();
-    const arr = JSON.parse(raw);
-    return Array.isArray(arr) ? new Set(arr) : new Set();
+    if (!raw) return {};
+    const parsed = JSON.parse(raw);
+    if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
+      return parsed as ReviewedMap;
+    }
+    return {};
   } catch {
-    return new Set();
+    return {};
   }
 }
 
-function write(set: Set<string>) {
+function write(map: ReviewedMap) {
   try {
-    localStorage.setItem(STORAGE_KEY, JSON.stringify([...set]));
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(map));
   } catch {}
 }
 
-// Cross-tab / cross-hook sync via a simple pub-sub.
+// Cross-hook sync.
 const listeners = new Set<() => void>();
 function notify() {
   for (const fn of listeners) fn();
 }
 
 export function useReviewedSessions() {
-  const [ids, setIds] = useState<Set<string>>(() => read());
+  const [map, setMap] = useState<ReviewedMap>(() => read());
+  const mapRef = useRef(map);
+  mapRef.current = map;
 
   useEffect(() => {
-    const onChange = () => setIds(read());
+    const onChange = () => setMap(read());
     listeners.add(onChange);
     return () => {
       listeners.delete(onChange);
     };
   }, []);
 
-  const markReviewed = useCallback((id: string) => {
-    const next = new Set(read());
-    if (next.has(id)) return;
-    next.add(id);
+  // mark session as reviewed AT the given mtime (usually session.modified_ms
+  // at the moment the user clicked Review).
+  const markReviewed = useCallback((id: string, mtime: number) => {
+    const next = { ...read() };
+    next[id] = mtime;
     write(next);
     notify();
   }, []);
 
   const unmarkReviewed = useCallback((id: string) => {
-    const next = new Set(read());
-    if (!next.has(id)) return;
-    next.delete(id);
+    const next = { ...read() };
+    if (!(id in next)) return;
+    delete next[id];
     write(next);
     notify();
   }, []);
 
-  const markAllReviewed = useCallback((idsToMark: Iterable<string>) => {
-    const next = new Set(read());
-    let changed = false;
-    for (const id of idsToMark) {
-      if (!next.has(id)) {
-        next.add(id);
-        changed = true;
+  const markAllReviewed = useCallback(
+    (entries: Iterable<[string, number]>) => {
+      const next = { ...read() };
+      let changed = false;
+      for (const [id, mtime] of entries) {
+        if (next[id] !== mtime) {
+          next[id] = mtime;
+          changed = true;
+        }
       }
-    }
-    if (changed) {
-      write(next);
-      notify();
-    }
-  }, []);
+      if (changed) {
+        write(next);
+        notify();
+      }
+    },
+    []
+  );
 
-  const isReviewed = useCallback((id: string) => ids.has(id), [ids]);
+  // Stable callback reading through ref.
+  // A session is "reviewed" only if its current mtime matches what we stored
+  // at review time. If Claude has since written, the mtime advances and the
+  // session naturally un-reviews.
+  const isReviewed = useCallback(
+    (id: string, currentMtime: number) =>
+      mapRef.current[id] === currentMtime,
+    []
+  );
 
-  return { isReviewed, markReviewed, unmarkReviewed, markAllReviewed };
+  return {
+    isReviewed,
+    reviewedMap: map,
+    markReviewed,
+    unmarkReviewed,
+    markAllReviewed,
+  };
 }
 
 export function hasBootstrapped(): boolean {
