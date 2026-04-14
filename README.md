@@ -1,5 +1,7 @@
 # Orka
 
+**Orchestrate your work and life with AI agents.**
+
 A macOS desktop app that wraps the local [Claude Code](https://docs.claude.com/en/docs/claude-code/overview) CLI.
 
 **Monitor** every Claude session running on your machine at a glance — which ones are generating, which ones are waiting for your input, which ones are done. **Build pipelines** on a node canvas by chaining chat / agent / knowledge-base nodes.

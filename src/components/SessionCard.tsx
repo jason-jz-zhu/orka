@@ -134,8 +134,8 @@ export default function SessionCard({
         <button
           className="session-card__primary"
           title={
-            state === "for-review"
-              ? "Review: jump back to the terminal running this session · Alt+Click for debug info"
+            session.status === "live"
+              ? "Jump back to the terminal running this session · Alt+Click for debug info"
               : "Open transcript · Alt+Click for debug info"
           }
           onClick={(e) => {
@@ -147,9 +147,10 @@ export default function SessionCard({
               });
               return;
             }
-            // For "Review" (live + awaiting_user), jump to terminal instead
-            // of opening the transcript drawer.
-            if (state === "for-review" && session.status === "live") {
+            // Any live session — whether Claude is still generating OR
+            // awaiting user input — maps to "take me back to that terminal".
+            // Non-live (done / errored) sessions open the transcript drawer.
+            if (session.status === "live") {
               focusTerminal(session.path);
               return;
             }

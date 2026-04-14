@@ -24,6 +24,19 @@ struct CachedTail {
     last_user_preview: Option<String>,
 }
 
+/// Harness-injected wrappers that show up as `type: "user"` text but are
+/// NOT real human asks — skip them when deriving `last_user_preview`.
+fn is_system_scaffold_text(t: &str) -> bool {
+    const PREFIXES: &[&str] = &[
+        "<local-command-",
+        "<command-",
+        "<task-notification>",
+        "<system-reminder>",
+        "<tool-use-id>",
+    ];
+    PREFIXES.iter().any(|p| t.starts_with(p))
+}
+
 /// Returns the extracted text of a real user ask, or None if the line
 /// isn't one.
 ///
@@ -52,7 +65,7 @@ fn extract_real_user_ask(v: &serde_json::Value) -> Option<String> {
     // Two content shapes: plain string OR array of blocks.
     if let Some(s) = content.as_str() {
         let t = s.trim();
-        if t.is_empty() || t.starts_with("<local-command-") || t.starts_with("<command-") {
+        if t.is_empty() || is_system_scaffold_text(t) {
             return None;
         }
         return Some(truncate(s, 160));
@@ -74,7 +87,7 @@ fn extract_real_user_ask(v: &serde_json::Value) -> Option<String> {
             Some("text") => {
                 if let Some(s) = b.get("text").and_then(|x| x.as_str()) {
                     let t = s.trim();
-                    if t.starts_with("<local-command-") || t.starts_with("<command-") {
+                    if is_system_scaffold_text(t) {
                         continue;
                     }
                     if !out.is_empty() {
@@ -1360,6 +1373,30 @@ mod tests {
     fn real_ask_skips_is_meta() {
         let v = parse(
             r#"{"type":"user","isMeta":true,"message":{"role":"user","content":"<command-name>/clear</command-name>"}}"#,
+        );
+        assert!(extract_real_user_ask(&v).is_none());
+    }
+
+    #[test]
+    fn real_ask_skips_task_notification_wrapper() {
+        let v = parse(
+            r#"{"type":"user","message":{"role":"user","content":"<task-notification> <task-id>x</task-id></task-notification>"}}"#,
+        );
+        assert!(extract_real_user_ask(&v).is_none());
+    }
+
+    #[test]
+    fn real_ask_skips_system_reminder_wrapper() {
+        let v = parse(
+            r#"{"type":"user","message":{"role":"user","content":"<system-reminder>Be concise</system-reminder>"}}"#,
+        );
+        assert!(extract_real_user_ask(&v).is_none());
+    }
+
+    #[test]
+    fn real_ask_skips_scaffold_in_text_block_array() {
+        let v = parse(
+            r#"{"type":"user","message":{"role":"user","content":[{"type":"text","text":"<task-notification>noise</task-notification>"}]}}"#,
         );
         assert!(extract_real_user_ask(&v).is_none());
     }
