@@ -13,8 +13,12 @@ import AgentNode from "./nodes/AgentNode";
 import KnowledgeBaseNode from "./nodes/KnowledgeBaseNode";
 import SessionNode from "./nodes/SessionNode";
 import OutputNode from "./nodes/OutputNode";
+import PipelineRefNode from "./nodes/PipelineRefNode";
+import SkillRefNode from "./nodes/SkillRefNode";
 import WorkspaceSwitcher from "./components/WorkspaceSwitcher";
 import PipelineLibrary from "./components/PipelineLibrary";
+import SkillPalette from "./components/SkillPalette";
+import RunsDashboard from "./components/RunsDashboard";
 import SessionDashboard from "./components/SessionDashboard";
 import StatusBar from "./components/StatusBar";
 import { usePersistence } from "./lib/persistence";
@@ -25,6 +29,7 @@ import OnboardingModal, {
   hasCompletedOnboarding,
 } from "./components/OnboardingModal";
 import GeneratePipelineModal from "./components/GeneratePipelineModal";
+import SettingsModal from "./components/SettingsModal";
 import ScheduleModal from "./components/ScheduleModal";
 import {
   listSchedules,
@@ -42,9 +47,11 @@ const nodeTypes: NodeTypes = {
   kb: KnowledgeBaseNode as any,
   session: SessionNode as any,
   output: OutputNode as any,
+  pipeline_ref: PipelineRefNode as any,
+  skill_ref: SkillRefNode as any,
 };
 
-type Tab = "pipeline" | "monitor";
+type Tab = "pipeline" | "monitor" | "runs";
 
 export default function App() {
   usePersistence();
@@ -54,7 +61,6 @@ export default function App() {
     onNodesChange,
     onEdgesChange,
     onConnect,
-    addChatNode,
     addAgentNode,
     addKBNode,
     addOutputNode,
@@ -69,6 +75,7 @@ export default function App() {
     () => !hasCompletedOnboarding()
   );
   const [showGenerate, setShowGenerate] = useState(false);
+  const [showSettings, setShowSettings] = useState(false);
   const [scheduleFor, setScheduleFor] = useState<string | null>(null);
   const [scheduledNames, setScheduledNames] = useState<Set<string>>(
     () => new Set()
@@ -77,6 +84,25 @@ export default function App() {
   const [runPaused, setRunPaused] = useState(false);
 
   async function onRunAll() {
+    // Collect any declared but unset pipeline inputs and prompt the user.
+    const meta = useGraph.getState().pipelineMeta;
+    const inputs = useGraph.getState().pipelineInputs;
+    if (Array.isArray(meta.inputs) && meta.inputs.length > 0) {
+      for (const inp of meta.inputs) {
+        if (inputs[inp.name] && inputs[inp.name].length > 0) continue;
+        const val = await promptDialog(
+          `Pipeline input · ${inp.name}${inp.description ? ` — ${inp.description}` : ""}`,
+          { default: inp.default ?? "", title: "Run pipeline" }
+        );
+        if (val === null) {
+          setRunStatus("run cancelled");
+          setTimeout(() => setRunStatus(null), 3000);
+          return;
+        }
+        useGraph.getState().setPipelineInput(inp.name, val);
+      }
+    }
+
     setRunning(true);
     setRunStatus("running…");
     try {
@@ -101,7 +127,13 @@ export default function App() {
   }
 
   async function writeTemplate(name: string) {
+    const meta = useGraph.getState().pipelineMeta;
     const stripped = {
+      version: 1,
+      name,
+      description: meta.description ?? "",
+      inputs: meta.inputs ?? [],
+      outputs: meta.outputs ?? [],
       nodes: nodes.map((n) => {
         const d = { ...(n.data as any) };
         delete d.output;
@@ -175,6 +207,12 @@ export default function App() {
       if (Array.isArray(parsed.nodes) && Array.isArray(parsed.edges)) {
         setGraph(parsed.nodes, parsed.edges);
         setActivePipelineName(name);
+        // Restore declared inputs/outputs/description if present.
+        useGraph.getState().setPipelineMeta({
+          description: parsed.description ?? "",
+          inputs: Array.isArray(parsed.inputs) ? parsed.inputs : [],
+          outputs: Array.isArray(parsed.outputs) ? parsed.outputs : [],
+        });
         setRunStatus(`loaded pipeline "${name}"`);
         setTimeout(() => setRunStatus(null), 4000);
       } else {
@@ -322,23 +360,6 @@ export default function App() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  async function onLoadTemplate() {
-    try {
-      const names = await invokeCmd<string[]>("list_templates");
-      if (!names.length) {
-        await alertDialog("No templates saved yet. Save one first.");
-        return;
-      }
-      const choice = await promptDialog(
-        `Available:\n${names.map((n) => `• ${n}`).join("\n")}\n\nType name to load:`,
-        { title: "Load pipeline" }
-      );
-      if (!choice) return;
-      await loadTemplateByName(choice);
-    } catch (e) {
-      await alertDialog(`Load templates failed: ${e}`);
-    }
-  }
 
   return (
     <div className="app">
@@ -362,6 +383,14 @@ export default function App() {
           >
             Studio
           </button>
+          <button
+            role="tab"
+            aria-selected={tab === "runs"}
+            className={"tabs__item" + (tab === "runs" ? " tabs__item--active" : "")}
+            onClick={() => setTab("runs")}
+          >
+            Runs
+          </button>
         </div>
         {tab === "pipeline" && (
           <>
@@ -380,16 +409,13 @@ export default function App() {
               </span>
             </span>
             <div className="toolbar__divider" />
-            <button onClick={() => addChatNode()}>+ Chat</button>
             <button onClick={() => addAgentNode()}>+ Agent</button>
-            <button onClick={() => addKBNode()}>+ KB</button>
+            <button onClick={() => addKBNode()}>+ Input</button>
             <button onClick={() => addOutputNode()}>+ Output</button>
             <div className="toolbar__divider" />
             <button onClick={onRunAll} disabled={running} className="toolbar__primary">
               {running ? "Running…" : "▶ Run All"}
             </button>
-            <button onClick={onSaveTemplate}>Save</button>
-            <button onClick={onLoadTemplate}>Load</button>
             {runStatus && <span className="toolbar__status">{runStatus}</span>}
             {runPaused && (
               <button
@@ -402,19 +428,29 @@ export default function App() {
             )}
           </>
         )}
+        <button
+          className="toolbar__settings"
+          onClick={() => setShowSettings(true)}
+          title="Settings · destinations"
+        >
+          ⚙︎
+        </button>
         <span className="toolbar__title">Orka</span>
       </div>
       {/* Both tabs stay mounted; hide the inactive one with `hidden` (display:none).
           Keeps SessionDashboard state + ReactFlow instance alive across switches. */}
       <div className="main" hidden={tab !== "pipeline"}>
-        <PipelineLibrary
-          onLoad={loadTemplateByName}
-          onSaveCurrent={onSaveTemplate}
-          onNew={onNewPipeline}
-          onGenerate={() => setShowGenerate(true)}
-          onSchedule={(name) => setScheduleFor(name)}
-          scheduledNames={scheduledNames}
-        />
+        <div className="sidebar">
+          <PipelineLibrary
+            onLoad={loadTemplateByName}
+            onSaveCurrent={onSaveTemplate}
+            onNew={onNewPipeline}
+            onGenerate={() => setShowGenerate(true)}
+            onSchedule={(name) => setScheduleFor(name)}
+            scheduledNames={scheduledNames}
+          />
+          <SkillPalette />
+        </div>
         <div className="canvas">
           <ReactFlow
             nodes={nodes}
@@ -437,6 +473,9 @@ export default function App() {
           active={tab === "monitor"}
           onJumpToPipeline={() => setTab("pipeline")}
         />
+      </div>
+      <div className="main" hidden={tab !== "runs"}>
+        <RunsDashboard />
       </div>
       {tab === "pipeline" && <StatusBar />}
       {showOnboarding && (
@@ -462,6 +501,9 @@ export default function App() {
             tickSchedules();
           }}
         />
+      )}
+      {showSettings && (
+        <SettingsModal onClose={() => setShowSettings(false)} />
       )}
     </div>
   );

@@ -119,6 +119,24 @@ async function browserFallback<T>(
   if (cmd === "delete_template") return undefined as unknown as T;
   if (cmd === "write_output_file") return "/tmp/orka-fake.md" as unknown as T;
   if (cmd === "outputs_dir") return "/tmp/orka-outputs" as unknown as T;
+  if (cmd === "icloud_orka_path") return "/tmp/orka-icloud" as unknown as T;
+  if (cmd === "write_to_icloud") return "/tmp/orka-icloud/fake.md" as unknown as T;
+  if (cmd === "append_to_apple_note") return "created:fake" as unknown as T;
+  if (cmd === "markdown_to_html") {
+    const md = String((args as { markdown?: string } | undefined)?.markdown ?? "");
+    return `<pre>${md.replace(/[<>&]/g, (c) => ({"<":"&lt;",">":"&gt;","&":"&amp;"}[c] ?? c))}</pre>` as unknown as T;
+  }
+  if (cmd === "post_to_webhook") return "HTTP 200 · POST (browser stub)" as unknown as T;
+  if (cmd === "run_shell_destination") return "shell ok (browser stub)" as unknown as T;
+  if (cmd === "list_destination_profiles") return [] as unknown as T;
+  if (cmd === "save_destination_profile") return undefined as unknown as T;
+  if (cmd === "delete_destination_profile") return undefined as unknown as T;
+  if (cmd === "get_destination_profile") return null as unknown as T;
+  if (cmd === "test_wework_webhook") return "HTTP 200 · sent (browser stub)" as unknown as T;
+  if (cmd === "send_via_profile") return "ok (browser stub)" as unknown as T;
+  if (cmd === "open_app_by_name") return undefined as unknown as T;
+  if (cmd === "read_file_text") return "{}" as unknown as T;
+  if (cmd === "fetch_text_url") return "{}" as unknown as T;
   if (cmd === "list_schedules") return [] as unknown as T;
   if (cmd === "get_schedule") return null as unknown as T;
   if (cmd === "save_schedule") return undefined as unknown as T;

@@ -1,7 +1,12 @@
 import { useEffect, useState } from "react";
+import {
+  open as openDialog,
+  save as saveDialog,
+} from "@tauri-apps/plugin-dialog";
 import { invokeCmd, listenEvent } from "../lib/tauri";
 import { useGraph } from "../lib/graph-store";
-import { alertDialog, confirmDialog } from "../lib/dialogs";
+import { alertDialog, confirmDialog, promptDialog } from "../lib/dialogs";
+import SkillExportModal from "./SkillExportModal";
 
 type Props = {
   onLoad: (name: string) => void;
@@ -25,6 +30,101 @@ export default function PipelineLibrary({
   const [templates, setTemplates] = useState<string[]>([]);
   const [collapsed, setCollapsed] = useState(false);
   const [loading, setLoading] = useState(true);
+  const [skillExportFor, setSkillExportFor] = useState<string | null>(null);
+
+  async function importFromFile() {
+    const picked = await openDialog({
+      multiple: false,
+      filters: [{ name: "Pipeline JSON", extensions: ["json"] }],
+      title: "Import pipeline JSON",
+    });
+    if (typeof picked !== "string") return;
+    try {
+      const text = await invokeCmd<string>("read_file_text", { path: picked });
+      await importJsonText(text);
+    } catch (e) {
+      await alertDialog(`Import failed: ${e}`);
+    }
+  }
+
+  async function importFromUrl() {
+    const url = await promptDialog(
+      "URL to a pipeline JSON (e.g. raw GitHub gist)",
+      { title: "Import from URL" }
+    );
+    if (!url) return;
+    try {
+      const text = await invokeCmd<string>("fetch_text_url", { url });
+      await importJsonText(text);
+    } catch (e) {
+      await alertDialog(`Fetch failed: ${e}`);
+    }
+  }
+
+  async function importJsonText(text: string) {
+    let parsed: { name?: string; nodes?: unknown; edges?: unknown };
+    try {
+      parsed = JSON.parse(text);
+    } catch {
+      throw new Error("not valid JSON");
+    }
+    if (!Array.isArray(parsed.nodes) || !Array.isArray(parsed.edges)) {
+      throw new Error("missing 'nodes' or 'edges' array");
+    }
+    let name =
+      typeof parsed.name === "string" && parsed.name.trim()
+        ? parsed.name.trim()
+        : null;
+    if (!name) {
+      name =
+        (await promptDialog("Save imported pipeline as:", {
+          title: "Imported pipeline name",
+        })) ?? null;
+      if (!name) return;
+    }
+    await invokeCmd("save_template", { name, content: text });
+    await refresh();
+  }
+
+  async function exportToFile(name: string) {
+    try {
+      const raw = await invokeCmd<string>("load_template", { name });
+      const dest = await saveDialog({
+        defaultPath: `${name}.json`,
+        filters: [{ name: "Pipeline JSON", extensions: ["json"] }],
+        title: "Export pipeline as JSON",
+      });
+      if (!dest) return;
+      await invokeCmd("write_output_file", { path: dest, content: raw });
+    } catch (e) {
+      await alertDialog(`Export failed: ${e}`);
+    }
+  }
+
+  async function runSkillExport(name: string, targetDir: string) {
+    try {
+      const dir = await invokeCmd<string>("export_pipeline_as_skill", {
+        name,
+        targetDir,
+      });
+      const slug = dir.split("/").filter(Boolean).pop() ?? name;
+      const isGlobalOrProject = /\/\.claude\/skills\//.test(dir + "/");
+      const hint = isGlobalOrProject
+        ? `Invoke with \`/${slug}\` in any Claude Code conversation${
+            targetDir.includes("/.claude/skills") &&
+            !targetDir.startsWith("~")
+              ? ` run inside that project`
+              : ``
+          }.`
+        : `Not in a .claude/skills dir, so Claude won't auto-discover it. Move the folder into \`~/.claude/skills/\` or a project's \`.claude/skills/\` to activate.`;
+      await alertDialog(
+        `✓ Exported as Claude skill\n\n${dir}\n\n${hint}`,
+        "Skill exported"
+      );
+    } catch (e) {
+      await alertDialog(`Skill export failed: ${e}`);
+    }
+  }
 
   async function refresh() {
     try {
@@ -67,6 +167,7 @@ export default function PipelineLibrary({
   }
 
   return (
+    <>
     <div className="pipeline-lib">
       <div className="sidebar__header">
         <span className="sidebar__title">Pipelines</span>
@@ -112,6 +213,22 @@ export default function PipelineLibrary({
           ✨ Generate from prompt
         </button>
       </div>
+      <div className="pipeline-lib__io-row">
+        <button
+          className="pipeline-lib__io-btn"
+          onClick={importFromFile}
+          title="Import a pipeline JSON from disk"
+        >
+          ⬆ Import
+        </button>
+        <button
+          className="pipeline-lib__io-btn"
+          onClick={importFromUrl}
+          title="Import a pipeline from a public URL (e.g. raw GitHub gist)"
+        >
+          🌐 URL
+        </button>
+      </div>
       {loading && <div className="sidebar__status">loading…</div>}
       {!loading && templates.length === 0 && (
         <div className="sidebar__status">(no templates yet)</div>
@@ -131,6 +248,26 @@ export default function PipelineLibrary({
             >
               <span className="pipeline-lib__icon">{isActive ? "●" : "▸"}</span>
               <span className="pipeline-lib__name">{name}</span>
+              <button
+                className="pipeline-lib__schedule"
+                title={`Export "${name}" as Claude Code skill`}
+                onClick={(e) => {
+                  e.stopPropagation();
+                  setSkillExportFor(name);
+                }}
+              >
+                🎯
+              </button>
+              <button
+                className="pipeline-lib__schedule"
+                title={`Export "${name}" to a JSON file`}
+                onClick={(e) => {
+                  e.stopPropagation();
+                  exportToFile(name);
+                }}
+              >
+                ⬇
+              </button>
               <button
                 className={
                   "pipeline-lib__schedule" +
@@ -183,5 +320,17 @@ export default function PipelineLibrary({
         })}
       </div>
     </div>
+    {skillExportFor && (
+      <SkillExportModal
+        pipelineName={skillExportFor}
+        onCancel={() => setSkillExportFor(null)}
+        onConfirm={(targetDir) => {
+          const n = skillExportFor;
+          setSkillExportFor(null);
+          if (n) runSkillExport(n, targetDir);
+        }}
+      />
+    )}
+    </>
   );
 }

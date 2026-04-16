@@ -1,0 +1,1096 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=1440" />
+<title>Orka Demo — Personal Changelog</title>
+<style>
+html, body { background: #000 !important; }
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+body {
+  width: 1440px;
+  height: 900px;
+  overflow: hidden;
+  background: #000;
+  font-family: -apple-system, system-ui, sans-serif;
+  color: #c5cdda;
+  position: relative;
+}
+
+/* ── Scene base ── */
+.scene {
+  position: absolute;
+  inset: 0;
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 0.6s ease;
+}
+.scene.active { opacity: 1; pointer-events: auto; }
+
+/* ─────────────────────────────── SCENE 1 ── */
+#s1 {
+  background: #000;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 20px;
+}
+.s1-line {
+  font-size: 38px;
+  font-weight: 700;
+  color: #fff;
+  opacity: 0;
+  transform: translateY(12px);
+  transition: opacity 0.7s ease, transform 0.7s ease;
+}
+.s1-line.sub {
+  font-size: 18px;
+  font-weight: 400;
+  color: #6b7a90;
+}
+.s1-line.visible { opacity: 1; transform: translateY(0); }
+
+/* ─────────────────────────────── SCENE 2 ── */
+#s2 {
+  background: #000;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 24px;
+}
+.typewriter-wrap {
+  font-family: 'SF Mono', 'Fira Mono', monospace;
+  font-size: 22px;
+  color: #c5cdda;
+  max-width: 860px;
+  text-align: left;
+  line-height: 1.5;
+}
+.typewriter-wrap .prompt { color: #3b82f6; }
+#tw-cursor {
+  display: inline-block;
+  width: 2px;
+  height: 1.2em;
+  background: #3b82f6;
+  vertical-align: text-bottom;
+  animation: blink 0.9s step-end infinite;
+}
+@keyframes blink { 50% { opacity: 0; } }
+.s2-tagline {
+  font-size: 22px;
+  color: #8b9aad;
+  font-style: italic;
+  opacity: 0;
+  transition: opacity 0.8s ease;
+}
+.s2-tagline.visible { opacity: 1; }
+
+/* ─────────────────────────────── SCENE 3 ── */
+#s3 { background: #0a0d14; }
+
+/* toolbar */
+.toolbar {
+  height: 48px;
+  background: #0e1118;
+  border-bottom: 1px solid #1a1f2e;
+  display: flex;
+  align-items: center;
+  padding: 0 20px;
+  gap: 12px;
+  position: relative;
+}
+.toolbar-brand {
+  font-size: 16px;
+  font-weight: 700;
+  color: #fff;
+  letter-spacing: -0.3px;
+  margin-right: 8px;
+}
+.toolbar-brand span { color: #3b82f6; }
+.tab-group { display: flex; gap: 2px; }
+.tab {
+  font-size: 13px;
+  color: #6b7a90;
+  padding: 5px 14px;
+  border-radius: 6px;
+  cursor: pointer;
+}
+.tab.active { color: #fff; background: #1a1f2e; }
+.toolbar-right { margin-left: auto; display: flex; gap: 8px; align-items: center; }
+.btn-sm {
+  font-size: 12px;
+  padding: 5px 12px;
+  border-radius: 6px;
+  border: 1px solid #2a3040;
+  background: transparent;
+  color: #c5cdda;
+  cursor: pointer;
+}
+.btn-run {
+  font-size: 12px;
+  padding: 5px 14px;
+  border-radius: 6px;
+  border: none;
+  background: #166534;
+  color: #4ade80;
+  font-weight: 600;
+  cursor: pointer;
+  transition: background 0.3s, color 0.3s;
+}
+.btn-run.running {
+  background: #1a3a1a;
+  color: #86efac;
+  animation: pulse-green 1s ease-in-out infinite;
+}
+@keyframes pulse-green {
+  0%, 100% { box-shadow: 0 0 0 0 rgba(74,222,128,0.4); }
+  50% { box-shadow: 0 0 0 6px rgba(74,222,128,0); }
+}
+
+/* main layout */
+.studio-body {
+  display: flex;
+  height: calc(900px - 48px);
+}
+
+/* sidebar */
+.sidebar {
+  width: 240px;
+  min-width: 240px;
+  background: #0e1118;
+  border-right: 1px solid #1a1f2e;
+  padding: 16px 0;
+  overflow: hidden;
+}
+.sidebar-section {
+  margin-bottom: 20px;
+}
+.sidebar-label {
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 1px;
+  color: #3d4a5e;
+  padding: 0 16px;
+  margin-bottom: 6px;
+  text-transform: uppercase;
+}
+.sidebar-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 7px 16px;
+  font-size: 13px;
+  color: #7a8a9e;
+  cursor: pointer;
+  transition: background 0.2s, color 0.2s, border-left-color 0.2s;
+  border-left: 3px solid transparent;
+}
+.sidebar-item:hover { background: #131720; color: #c5cdda; }
+.sidebar-item.active {
+  background: #131a28;
+  color: #c5cdda;
+  border-left-color: #3b82f6;
+}
+.sidebar-item .item-dot {
+  width: 6px; height: 6px;
+  border-radius: 50%;
+  background: #3d4a5e;
+  flex-shrink: 0;
+}
+.sidebar-item.active .item-dot { background: #3b82f6; }
+.sidebar-item.skill .item-dot { background: #8b5cf6; }
+
+/* canvas area */
+.canvas-wrap {
+  flex: 1;
+  position: relative;
+  overflow: hidden;
+  background: #0a0d14;
+  background-image:
+    radial-gradient(circle, #1a2030 1px, transparent 1px);
+  background-size: 28px 28px;
+}
+
+/* nodes */
+.node {
+  position: absolute;
+  border-radius: 10px;
+  border: 1px solid #22262e;
+  background: #13161c;
+  opacity: 0;
+  transform: scale(0.88);
+  transition: opacity 0.45s ease, transform 0.45s ease;
+}
+.node.visible { opacity: 1; transform: scale(1); }
+.node.done { border-color: #166534; }
+
+.node-header {
+  padding: 8px 12px 4px;
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.8px;
+  text-transform: uppercase;
+}
+.node-body { padding: 4px 12px 10px; }
+.node-title {
+  font-size: 12px;
+  font-weight: 600;
+  color: #e2e8f0;
+  margin-bottom: 3px;
+}
+.node-desc { font-size: 11px; color: #5a6a80; line-height: 1.4; }
+
+.node-input { width: 180px; border-left: 4px solid #3b82f6; }
+.node-input .node-header { color: #3b82f6; }
+.node-agent { width: 220px; border-left: 4px solid #4ade80; }
+.node-agent .node-header { color: #4ade80; }
+.node-output { width: 210px; border-left: 4px solid #f59e0b; }
+.node-output .node-header { color: #f59e0b; }
+
+.node-badge {
+  display: inline-block;
+  font-size: 9px;
+  padding: 2px 6px;
+  border-radius: 10px;
+  margin-top: 6px;
+  background: #1a1f2e;
+  color: #5a6a80;
+}
+.node-badge.done { background: #0d2d1a; color: #4ade80; }
+
+/* SVG edge layer */
+#edge-svg {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  overflow: visible;
+}
+.edge-path {
+  fill: none;
+  stroke: #3b82f6;
+  stroke-width: 2;
+  opacity: 0;
+  stroke-dasharray: 600;
+  stroke-dashoffset: 600;
+  transition: opacity 0.3s ease;
+}
+.edge-path.visible {
+  opacity: 0.7;
+  animation: dash-draw 0.9s ease forwards;
+}
+@keyframes dash-draw {
+  to { stroke-dashoffset: 0; }
+}
+
+/* scene 3 overlay text */
+.canvas-overlay-text {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  background: rgba(5, 8, 14, 0.72);
+  backdrop-filter: blur(4px);
+  -webkit-backdrop-filter: blur(4px);
+  opacity: 0;
+  transition: opacity 0.6s ease;
+  pointer-events: none;
+  z-index: 50;
+}
+.canvas-overlay-text.visible { opacity: 1; }
+.cot-line1 {
+  font-size: 24px;
+  font-weight: 700;
+  color: #fff;
+  letter-spacing: -0.3px;
+  text-shadow: 0 0 32px rgba(255,255,255,0.25);
+}
+.cot-line2 {
+  font-size: 20px;
+  font-weight: 500;
+  color: #3b82f6;
+  text-shadow: 0 0 24px rgba(59,130,246,0.5);
+}
+.cot-box {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 10px;
+  background: rgba(10,14,24,0.82);
+  border: 1px solid rgba(59,130,246,0.3);
+  box-shadow: 0 0 40px rgba(59,130,246,0.15), 0 8px 40px rgba(0,0,0,0.6);
+  border-radius: 14px;
+  padding: 24px 48px;
+}
+
+/* ─────────────────────────────── POPUP CARDS ── */
+.popup-overlay {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  pointer-events: none;
+  z-index: 100;
+}
+.popup-card {
+  width: 580px;
+  background: #0d1117;
+  border: 1px solid #2a3040;
+  border-radius: 14px;
+  box-shadow: 0 20px 60px rgba(0,0,0,0.6);
+  padding: 20px 24px;
+  opacity: 0;
+  transform: scale(0.95) translateY(8px);
+  transition: opacity 0.35s ease, transform 0.35s ease;
+  pointer-events: auto;
+}
+.popup-card.visible {
+  opacity: 1;
+  transform: scale(1) translateY(0);
+}
+.popup-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 14px;
+  padding-bottom: 12px;
+  border-bottom: 1px solid #1a2030;
+}
+.popup-type {
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.8px;
+  text-transform: uppercase;
+}
+.popup-type.input { color: #3b82f6; }
+.popup-type.agent { color: #4ade80; }
+.popup-type.output { color: #f59e0b; }
+.popup-badge {
+  font-size: 11px;
+  padding: 3px 10px;
+  border-radius: 20px;
+  font-weight: 600;
+}
+.popup-badge.running { background: #2d1f00; color: #f59e0b; }
+.popup-badge.done { background: #0d2d1a; color: #4ade80; }
+.popup-badge.thinking { background: #1a1230; color: #8b5cf6; }
+.popup-lines {
+  font-family: 'SF Mono', 'Fira Mono', monospace;
+  font-size: 12px;
+  color: #8b9ab0;
+  line-height: 1.9;
+}
+.popup-lines .pl-title {
+  font-size: 13px;
+  font-weight: 600;
+  color: #e2e8f0;
+  margin-bottom: 6px;
+}
+.popup-lines .pl-line {
+  opacity: 0;
+  transition: opacity 0.3s ease;
+}
+.popup-lines .pl-line.visible { opacity: 1; }
+.popup-lines .pl-accent { color: #c5cdda; }
+.popup-lines .pl-green { color: #4ade80; }
+.popup-lines .pl-amber { color: #f59e0b; }
+.popup-lines .pl-blue { color: #3b82f6; }
+.popup-lines .pl-section {
+  color: #7a8a9e;
+  font-size: 11px;
+  margin-top: 4px;
+}
+
+/* ─────────────────────────────── SCENE 5 — NOTES ── */
+#s5 {
+  background: #000;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 28px;
+}
+.notes-mock {
+  width: 650px;
+  background: #1c1c1e;
+  border-radius: 12px;
+  box-shadow: 0 24px 80px rgba(0,0,0,0.7);
+  padding: 28px 32px;
+  opacity: 0;
+  transform: translateY(16px);
+  transition: opacity 0.7s ease, transform 0.7s ease;
+}
+.notes-mock.visible { opacity: 1; transform: translateY(0); }
+.notes-titlebar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 18px;
+  padding-bottom: 14px;
+  border-bottom: 1px solid #2c2c2e;
+}
+.notes-dot {
+  width: 12px; height: 12px;
+  border-radius: 50%;
+}
+.notes-title-text {
+  font-size: 18px;
+  font-weight: 700;
+  color: #fff;
+  margin-left: 4px;
+}
+.notes-body {
+  font-size: 14px;
+  line-height: 1.85;
+  color: #c5cdda;
+}
+.notes-section-head {
+  font-weight: 600;
+  color: #e2e8f0;
+  margin-top: 12px;
+  margin-bottom: 4px;
+}
+.notes-body .nl { display: block; }
+.nl.green { color: #4ade80; }
+.nl.red { color: #f87171; }
+.nl.amber { color: #f59e0b; }
+.nl.gray { color: #8b9ab0; }
+.nl.italic { font-style: italic; color: #7a8a9e; }
+
+.s5-sub {
+  font-size: 16px;
+  color: #fff;
+  opacity: 0;
+  transition: opacity 0.8s ease;
+  text-align: center;
+}
+.s5-sub.visible { opacity: 1; }
+
+/* ─────────────────────────────── SCENE 6 ── */
+#s6 {
+  background: #000;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 20px;
+}
+.destinations-banner {
+  font-size: 20px;
+  color: #c5cdda;
+  letter-spacing: 6px;
+  opacity: 0;
+  transform: translateY(10px);
+  transition: opacity 0.6s ease, transform 0.6s ease;
+}
+.destinations-banner.visible { opacity: 1; transform: translateY(0); }
+.s6-sub {
+  font-size: 14px;
+  color: #6b7a90;
+  opacity: 0;
+  transition: opacity 0.6s ease 0.3s;
+}
+.s6-sub.visible { opacity: 1; }
+
+/* ─────────────────────────────── SCENE 7 ── */
+#s7 {
+  background: #000;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 28px;
+}
+.usecases-grid {
+  display: flex;
+  gap: 20px;
+  flex-wrap: nowrap;
+}
+.uc-card {
+  width: 220px;
+  background: #0e1118;
+  border: 1px solid #1a1f2e;
+  border-radius: 14px;
+  padding: 20px 18px;
+  opacity: 0;
+  transform: translateY(14px) scale(0.95);
+  transition: opacity 0.4s ease, transform 0.4s ease;
+}
+.uc-card.visible { opacity: 1; transform: translateY(0) scale(1); }
+.uc-icon { font-size: 28px; margin-bottom: 10px; }
+.uc-title { font-size: 14px; font-weight: 600; color: #fff; margin-bottom: 5px; }
+.uc-sub { font-size: 12px; color: #6b7a90; }
+.s7-footer {
+  font-size: 15px;
+  color: #c5cdda;
+  opacity: 0;
+  transition: opacity 0.6s ease;
+  text-align: center;
+}
+.s7-footer.visible { opacity: 1; }
+
+/* ─────────────────────────────── SCENE 8 ── */
+#s8 {
+  background: #000;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 18px;
+}
+.s8-line {
+  opacity: 0;
+  transform: translateY(10px);
+  transition: opacity 0.7s ease, transform 0.7s ease;
+}
+.s8-line.visible { opacity: 1; transform: translateY(0); }
+.s8-q { font-size: 32px; font-weight: 700; color: #fff; }
+.s8-answer { font-size: 32px; font-weight: 700; color: #3b82f6; }
+.s8-brand { font-size: 48px; font-weight: 800; color: #fff; letter-spacing: -1px; margin-top: 8px; }
+.s8-tagline { font-size: 14px; color: #6b7a90; }
+.s8-url { font-size: 14px; color: #8b5cf6; }
+
+/* canvas transform layer */
+#canvas-transform {
+  position: absolute;
+  inset: 0;
+  transform-origin: center center;
+  transition: transform 1s cubic-bezier(0.25, 0.46, 0.45, 0.94);
+}
+</style>
+</head>
+<body>
+
+<!-- SCENE 1: Hook -->
+<div class="scene" id="s1">
+  <div class="s1-line" id="s1l1">It's Friday.</div>
+  <div class="s1-line" id="s1l2">Where did your week go?</div>
+  <div class="s1-line sub" id="s1l3">You don't remember. Nobody does.</div>
+</div>
+
+<!-- SCENE 2: One Sentence -->
+<div class="scene" id="s2">
+  <div class="typewriter-wrap">
+    <span class="prompt">&gt; </span><span id="tw-text"></span><span id="tw-cursor"></span>
+  </div>
+  <div class="s2-tagline" id="s2-tagline">Say it once. Orka runs it forever.</div>
+</div>
+
+<!-- SCENE 3: Orka UI -->
+<div class="scene" id="s3">
+  <!-- Toolbar -->
+  <div class="toolbar">
+    <div class="toolbar-brand">Orka</div>
+    <div class="tab-group">
+      <div class="tab">Live</div>
+      <div class="tab active">Studio</div>
+      <div class="tab">Runs</div>
+    </div>
+    <div class="toolbar-right">
+      <button class="btn-sm">+ Agent</button>
+      <button class="btn-sm">+ Input</button>
+      <button class="btn-sm">+ Output</button>
+      <button class="btn-run" id="run-btn">Run All</button>
+    </div>
+  </div>
+
+  <div class="studio-body">
+    <!-- Sidebar -->
+    <div class="sidebar">
+      <div class="sidebar-section">
+        <div class="sidebar-label">Pipelines</div>
+        <div class="sidebar-item" id="sb-changelog">
+          <div class="item-dot"></div>
+          personal-changelog
+        </div>
+        <div class="sidebar-item">
+          <div class="item-dot"></div>
+          screenshot-kb
+        </div>
+        <div class="sidebar-item">
+          <div class="item-dot"></div>
+          receipt-filer
+        </div>
+      </div>
+      <div class="sidebar-section">
+        <div class="sidebar-label">Skills</div>
+        <div class="sidebar-item skill"><div class="item-dot"></div>git-log-scanner</div>
+        <div class="sidebar-item skill"><div class="item-dot"></div>calendar-reader</div>
+        <div class="sidebar-item skill"><div class="item-dot"></div>notes-tracker</div>
+        <div class="sidebar-item skill"><div class="item-dot"></div>changelog-writer</div>
+        <div class="sidebar-item skill"><div class="item-dot"></div>orka-skill-builder</div>
+      </div>
+    </div>
+
+    <!-- Canvas -->
+    <div class="canvas-wrap" id="canvas-wrap">
+      <div id="canvas-transform">
+        <!-- SVG edges -->
+        <svg id="edge-svg" width="900" height="852">
+          <!-- N1 → N5 -->
+          <path class="edge-path" id="e1" d=""/>
+          <!-- N2 → N5 -->
+          <path class="edge-path" id="e2" d=""/>
+          <!-- N3 → N5 -->
+          <path class="edge-path" id="e3" d=""/>
+          <!-- N4 → N5 -->
+          <path class="edge-path" id="e4" d=""/>
+          <!-- N5 → N6 -->
+          <path class="edge-path" id="e5" stroke="#4ade80" d=""/>
+        </svg>
+
+        <!-- Input Nodes -->
+        <div class="node node-input" id="n1" style="left:80px;top:80px;">
+          <div class="node-header">INPUT · N1</div>
+          <div class="node-body">
+            <div class="node-title">📁 Git Commits</div>
+            <div class="node-desc">Scan local repositories</div>
+            <div class="node-badge" id="n1-badge">ready</div>
+          </div>
+        </div>
+        <div class="node node-input" id="n2" style="left:80px;top:240px;">
+          <div class="node-header">INPUT · N2</div>
+          <div class="node-body">
+            <div class="node-title">📅 Calendar Events</div>
+            <div class="node-desc">Read this week's events</div>
+            <div class="node-badge" id="n2-badge">ready</div>
+          </div>
+        </div>
+        <div class="node node-input" id="n3" style="left:80px;top:400px;">
+          <div class="node-header">INPUT · N3</div>
+          <div class="node-body">
+            <div class="node-title">📝 Notes Modified</div>
+            <div class="node-desc">Detect changed notes</div>
+            <div class="node-badge" id="n3-badge">ready</div>
+          </div>
+        </div>
+        <div class="node node-input" id="n4" style="left:80px;top:560px;">
+          <div class="node-header">INPUT · N4</div>
+          <div class="node-body">
+            <div class="node-title">📄 Files Created</div>
+            <div class="node-desc">New files this week</div>
+            <div class="node-badge" id="n4-badge">ready</div>
+          </div>
+        </div>
+
+        <!-- Agent Node -->
+        <div class="node node-agent" id="n5" style="left:380px;top:260px;">
+          <div class="node-header">AGENT · N5</div>
+          <div class="node-body">
+            <div class="node-title">Changelog Writer</div>
+            <div class="node-desc">Generate a personal changelog: what I actually did vs planned</div>
+            <div class="node-badge" id="n5-badge">ready</div>
+          </div>
+        </div>
+
+        <!-- Output Node -->
+        <div class="node node-output" id="n6" style="left:650px;top:280px;">
+          <div class="node-header">OUTPUT · N6</div>
+          <div class="node-body">
+            <div class="node-title">📝 Apple Notes</div>
+            <div class="node-desc">Note: "Weekly Changelog"</div>
+            <div class="node-badge" id="n6-badge">ready</div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Canvas overlay text -->
+      <div class="canvas-overlay-text" id="canvas-overlay">
+        <div class="cot-box">
+          <div class="cot-line1">Your skills, visualized.</div>
+          <div class="cot-line2">Runs locally — data never leaves your Mac.</div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Popup overlay inside scene 3 -->
+  <div class="popup-overlay" id="popup-overlay">
+    <div class="popup-card" id="popup-card">
+      <div class="popup-header">
+        <span class="popup-type" id="pc-type">INPUT · N1</span>
+        <span class="popup-badge running" id="pc-badge">⋯ running</span>
+      </div>
+      <div class="popup-lines" id="pc-lines"></div>
+    </div>
+  </div>
+</div>
+
+<!-- SCENE 5: Notes Result -->
+<div class="scene" id="s5">
+  <div class="notes-mock" id="notes-mock">
+    <div class="notes-titlebar">
+      <div class="notes-dot" style="background:#ff5f57;"></div>
+      <div class="notes-dot" style="background:#febc2e;"></div>
+      <div class="notes-dot" style="background:#28c840;"></div>
+      <div class="notes-title-text">📋 Weekly Changelog — April 18</div>
+    </div>
+    <div class="notes-body">
+      <div class="notes-section-head">What I actually did:</div>
+      <span class="nl green">✅ Shipped auth module (3 days, PR #142)</span>
+      <span class="nl green">✅ Dashboard redesign started (60%)</span>
+      <span class="nl green">✅ 6 planning docs written</span>
+      <span class="nl amber">⏰ 4.5 hrs in meetings (2 useful)</span>
+
+      <div class="notes-section-head" style="margin-top:16px;">What I planned but skipped:</div>
+      <span class="nl red">❌ Blog post about Orka launch</span>
+      <span class="nl red">❌ Fix flaky CI test</span>
+
+      <div style="margin-top:16px; padding-top:14px; border-top:1px solid #2c2c2e;">
+        <span class="nl italic">Reality: 68% execution rate.</span>
+        <span class="nl italic">Meetings ate Tuesday.</span>
+        <span class="nl italic">Next week: protect Wed + Thu as focus days.</span>
+      </div>
+    </div>
+  </div>
+  <div class="s5-sub" id="s5-sub">Every Friday evening. Automatically. Your data never left your Mac.</div>
+</div>
+
+<!-- SCENE 6: Destinations -->
+<div class="scene" id="s6">
+  <div class="destinations-banner" id="dest-banner">
+    📝 Notes &nbsp;·&nbsp; ☁️ iCloud &nbsp;·&nbsp; ⚡ Shortcuts &nbsp;·&nbsp; 💬 WeChat &nbsp;·&nbsp; 🔧 Shell &nbsp;·&nbsp; 🌐 Webhook
+  </div>
+  <div class="s6-sub" id="dest-sub">Runs locally on your Mac. Reaches any app.</div>
+</div>
+
+<!-- SCENE 7: Use Cases -->
+<div class="scene" id="s7">
+  <div class="usecases-grid">
+    <div class="uc-card" id="uc1">
+      <div class="uc-icon">📸</div>
+      <div class="uc-title">Screenshot → Knowledge Base</div>
+      <div class="uc-sub">Auto-organize your desktop</div>
+    </div>
+    <div class="uc-card" id="uc2">
+      <div class="uc-icon">👻</div>
+      <div class="uc-title">Relationship Maintenance</div>
+      <div class="uc-sub">Never ghost a friend again</div>
+    </div>
+    <div class="uc-card" id="uc3">
+      <div class="uc-icon">💡</div>
+      <div class="uc-title">Side Project Nudge</div>
+      <div class="uc-sub">Pick up where you left off</div>
+    </div>
+    <div class="uc-card" id="uc4">
+      <div class="uc-icon">🧾</div>
+      <div class="uc-title">Receipt → Auto-Filing</div>
+      <div class="uc-sub">Expenses sorted, locally</div>
+    </div>
+  </div>
+  <div class="s7-footer" id="s7-footer">Any workflow. Any app on your Mac. Your data stays yours.</div>
+</div>
+
+<!-- SCENE 8: End Card -->
+<div class="scene" id="s8">
+  <div class="s8-line" id="s8l1"><div class="s8-q">Where did your week go?</div></div>
+  <div class="s8-line" id="s8l2"><div class="s8-answer">Now you know.</div></div>
+  <div class="s8-line" id="s8l3"><div class="s8-brand">Orka</div></div>
+  <div class="s8-line" id="s8l4"><div class="s8-tagline">Your AI skills, visualized and automated — on your Mac</div></div>
+  <div class="s8-line" id="s8l5"><div class="s8-url">orka.dev</div></div>
+</div>
+
+<script>
+// ─────────────────────────── utilities ────────────────────────────
+function showScene(id) {
+  document.querySelectorAll('.scene').forEach(s => s.classList.remove('active'));
+  const el = document.getElementById(id);
+  if (el) el.classList.add('active');
+}
+
+function delay(ms) { return new Promise(r => setTimeout(r, ms)); }
+
+function fadeIn(el) { el && el.classList.add('visible'); }
+function fadeOut(el) { el && el.classList.remove('visible'); }
+
+// ─────────────────────────── typewriter ───────────────────────────
+async function typewrite(targetId, text, msPerChar) {
+  const el = document.getElementById(targetId);
+  let i = 0;
+  return new Promise(resolve => {
+    const t = setInterval(() => {
+      el.textContent += text[i++];
+      if (i >= text.length) { clearInterval(t); resolve(); }
+    }, msPerChar);
+  });
+}
+
+// ─────────────────────────── SVG edge paths ───────────────────────
+function buildEdges() {
+  // Node positions (left+width/2, top+height/2 approx)
+  // n1: left:80 top:80 w:180 h:~90  → right edge: (260, 125)
+  // n2: left:80 top:240 w:180 h:~90 → right edge: (260, 285)
+  // n3: left:80 top:400 w:180 h:~90 → right edge: (260, 445)
+  // n4: left:80 top:560 w:180 h:~90 → right edge: (260, 605)
+  // n5: left:380 top:260 w:220 h:~100 → left:(380,310) right:(600,310)
+  // n6: left:650 top:280 w:210 h:~90 → left:(650,325)
+
+  const n5lx = 380, n5cy = 310;
+  const n6lx = 650, n6cy = 325;
+
+  const inputs = [
+    { rx: 260, ry: 125, cpOffset: -120 },   // n1 — arc curves up
+    { rx: 260, ry: 285, cpOffset: -50  },   // n2 — slight arc
+    { rx: 260, ry: 445, cpOffset:  50  },   // n3 — slight arc
+    { rx: 260, ry: 605, cpOffset:  120 },   // n4 — arc curves down
+  ];
+
+  inputs.forEach((inp, i) => {
+    const mx = (inp.rx + n5lx) / 2;
+    const cp1x = mx;
+    const cp1y = inp.ry + inp.cpOffset;
+    const cp2x = mx;
+    const cp2y = n5cy + inp.cpOffset * 0.4;
+    const d = `M ${inp.rx} ${inp.ry} C ${cp1x} ${cp1y}, ${cp2x} ${cp2y}, ${n5lx} ${n5cy}`;
+    document.getElementById('e' + (i + 1)).setAttribute('d', d);
+  });
+
+  // n5 → n6
+  const mx = (600 + n6lx) / 2;
+  document.getElementById('e5').setAttribute('d',
+    `M 600 ${n5cy} C ${mx} ${n5cy - 20}, ${mx} ${n6cy + 20}, ${n6lx} ${n6cy}`
+  );
+}
+
+// ─────────────────────────── popup cards ──────────────────────────
+async function showPopup(typeClass, typeLabel, badgeText, badgeClass, lines, holdMs) {
+  const card = document.getElementById('popup-card');
+  const pcType = document.getElementById('pc-type');
+  const pcBadge = document.getElementById('pc-badge');
+  const pcLines = document.getElementById('pc-lines');
+
+  // reset
+  card.classList.remove('visible');
+  await delay(100);
+
+  pcType.className = 'popup-type ' + typeClass;
+  pcType.textContent = typeLabel;
+  pcBadge.className = 'popup-badge ' + badgeClass;
+  pcBadge.textContent = badgeText;
+  pcLines.innerHTML = '';
+
+  card.classList.add('visible');
+
+  // render lines with stagger
+  for (const line of lines) {
+    const div = document.createElement('div');
+    div.className = 'pl-line';
+    if (line.cls) div.classList.add(line.cls);
+    div.innerHTML = line.html;
+    pcLines.appendChild(div);
+    await delay(80);
+    div.classList.add('visible');
+  }
+
+  await delay(300);
+  // swap badge to done
+  pcBadge.className = 'popup-badge done';
+  pcBadge.textContent = '✓ done';
+
+  await delay(holdMs);
+  card.classList.remove('visible');
+  await delay(380);
+}
+
+// ─────────────────────────── main timeline ────────────────────────
+async function run() {
+  buildEdges();
+
+  // ── SCENE 1 (0–4s) ──
+  showScene('s1');
+  await delay(600);
+  fadeIn(document.getElementById('s1l1'));
+  await delay(900);
+  fadeIn(document.getElementById('s1l2'));
+  await delay(1200);
+  fadeIn(document.getElementById('s1l3'));
+  await delay(1800);
+
+  // ── SCENE 2 (4–9s) ──
+  showScene('s2');
+  await delay(400);
+  const twText = `Every night, scan my git commits, calendar, and notes. Tell me what I actually did.`;
+  await typewrite('tw-text', twText, 35);
+  // hide cursor
+  document.getElementById('tw-cursor').style.display = 'none';
+  await delay(500);
+  fadeIn(document.getElementById('s2-tagline'));
+  await delay(1800);
+
+  // ── SCENE 3 (9–20s) ──
+  showScene('s3');
+  await delay(500);
+
+  // 10s: click animation on sidebar item
+  await delay(500);
+  const sbItem = document.getElementById('sb-changelog');
+  sbItem.classList.add('active');
+
+  // 11s: input nodes appear staggered
+  await delay(1000);
+  for (let i = 1; i <= 4; i++) {
+    document.getElementById('n' + i).classList.add('visible');
+    await delay(500);
+  }
+
+  // 13s: agent node
+  await delay(400);
+  document.getElementById('n5').classList.add('visible');
+  await delay(1000);
+
+  // 14s: output node
+  document.getElementById('n6').classList.add('visible');
+  await delay(1000);
+
+  // 15s: edges animate
+  for (let i = 1; i <= 5; i++) {
+    const edge = document.getElementById('e' + i);
+    edge.classList.add('visible');
+    await delay(220);
+  }
+
+  // 17s: zoom
+  await delay(1000);
+  document.getElementById('canvas-transform').style.transform = 'scale(1.2) translate(-40px, 20px)';
+
+  // 18s: overlay text
+  await delay(600);
+  fadeIn(document.getElementById('canvas-overlay'));
+  await delay(2000);
+  fadeOut(document.getElementById('canvas-overlay'));
+
+  // reset zoom
+  document.getElementById('canvas-transform').style.transform = 'scale(1) translate(0,0)';
+
+  // ── SCENE 4: Execution (20–32s) — still scene 3 canvas + popup overlay ──
+  // run button pulse
+  const runBtn = document.getElementById('run-btn');
+  runBtn.classList.add('running');
+  runBtn.textContent = 'Running…';
+
+  // Card 1: Git Commits
+  await showPopup('input', 'INPUT · N1', '⋯ running', 'running', [
+    { html: '<div class="pl-title">📁 Git Commits</div>' },
+    { html: '' },
+    { html: '<span class="pl-accent">3 repos scanned:</span> orka, blog, side-project' },
+    { html: '<span class="pl-accent">12 commits</span> this week' },
+    { html: '<span class="pl-green">+847 lines</span>, <span class="pl-amber">−234 lines</span>' },
+  ], 1400);
+  document.getElementById('n1-badge').className = 'node-badge done';
+  document.getElementById('n1-badge').textContent = '✓ done';
+
+  // Card 2: Calendar
+  await showPopup('input', 'INPUT · N2', '⋯ running', 'running', [
+    { html: '<div class="pl-title">📅 Calendar Events</div>' },
+    { html: '' },
+    { html: '<span class="pl-accent">14 events</span> this week' },
+    { html: '<span class="pl-accent">5 meetings</span> (4.5 hrs total)' },
+    { html: '<span class="pl-green">3 focus blocks</span> (6 hrs)' },
+  ], 1400);
+  document.getElementById('n2-badge').className = 'node-badge done';
+  document.getElementById('n2-badge').textContent = '✓ done';
+
+  // Card 3: Notes
+  await showPopup('input', 'INPUT · N3', '⋯ running', 'running', [
+    { html: '<div class="pl-title">📝 Notes Modified</div>' },
+    { html: '' },
+    { html: '<span class="pl-accent">8 notes</span> updated' },
+    { html: 'Top topics: <span class="pl-blue">product roadmap</span>, hiring, Q2 planning' },
+  ], 1200);
+  document.getElementById('n3-badge').className = 'node-badge done';
+  document.getElementById('n3-badge').textContent = '✓ done';
+
+  // Card 4: Files
+  await showPopup('input', 'INPUT · N4', '⋯ running', 'running', [
+    { html: '<div class="pl-title">📄 Files Created</div>' },
+    { html: '' },
+    { html: '<span class="pl-accent">23 new files</span>' },
+    { html: 'Types: <span class="pl-blue">.ts (12)</span>, .md (6), .json (3), .css (2)' },
+  ], 1200);
+  document.getElementById('n4-badge').className = 'node-badge done';
+  document.getElementById('n4-badge').textContent = '✓ done';
+
+  // Card 5: Agent — big one
+  await showPopup('agent', 'AGENT · N5', '⋯ thinking', 'thinking', [
+    { html: '<div class="pl-title">🧠 Changelog Writer</div>' },
+    { html: '' },
+    { html: '<span class="pl-section">📋 Week of April 14–18</span>' },
+    { html: '' },
+    { html: '<span class="pl-accent">What you actually did:</span>' },
+    { html: '• <span class="pl-green">Shipped auth module (PR #142)</span> — 3 days' },
+    { html: '• 4.5 hrs in meetings <span class="pl-amber">(2 were useful)</span>' },
+    { html: '• Started dashboard redesign <span class="pl-accent">(60% done)</span>' },
+    { html: '• Wrote 6 planning docs but <span class="pl-amber">0 blog posts</span>' },
+    { html: '' },
+    { html: '<span class="pl-accent">What you planned but didn\'t do:</span>' },
+    { html: '• <span class="pl-amber">Blog post about Orka launch</span>' },
+    { html: '• <span class="pl-amber">Fix the flaky CI test</span>' },
+    { html: '' },
+    { html: '<span class="pl-section">Reality check:</span>' },
+    { html: '<span class="pl-accent">68% execution rate.</span> Meetings ate Tuesday.' },
+  ], 2200);
+  document.getElementById('n5-badge').className = 'node-badge done';
+  document.getElementById('n5-badge').textContent = '✓ done';
+
+  // Card 6: Output
+  await showPopup('output', 'OUTPUT · N6', '⋯ saving', 'running', [
+    { html: '<div class="pl-title">📝 Apple Notes</div>' },
+    { html: '' },
+    { html: '<span class="pl-green">✓ Saved to "Weekly Changelog — Apr 18"</span>' },
+  ], 900);
+  document.getElementById('n6-badge').className = 'node-badge done';
+  document.getElementById('n6-badge').textContent = '✓ done';
+
+  runBtn.classList.remove('running');
+  runBtn.textContent = 'Run All';
+
+  await delay(600);
+
+  // ── SCENE 5 (32–37s) ──
+  showScene('s5');
+  await delay(300);
+  fadeIn(document.getElementById('notes-mock'));
+  await delay(2000);
+  fadeIn(document.getElementById('s5-sub'));
+  await delay(2800);
+
+  // ── SCENE 6 (37–39s) ──
+  showScene('s6');
+  await delay(300);
+  fadeIn(document.getElementById('dest-banner'));
+  await delay(400);
+  fadeIn(document.getElementById('dest-sub'));
+  await delay(1600);
+
+  // ── SCENE 7 (39–44s) ──
+  showScene('s7');
+  await delay(300);
+  for (let i = 1; i <= 4; i++) {
+    fadeIn(document.getElementById('uc' + i));
+    await delay(900);
+  }
+  fadeIn(document.getElementById('s7-footer'));
+  await delay(1400);
+
+  // ── SCENE 8 (44–48s) ──
+  showScene('s8');
+  await delay(400);
+  const s8lines = ['s8l1','s8l2','s8l3','s8l4','s8l5'];
+  for (const id of s8lines) {
+    fadeIn(document.getElementById(id));
+    await delay(700);
+  }
+  // hold end card
+}
+
+// kick off
+window.addEventListener('load', () => run());
+</script>
+</body>
+</html>

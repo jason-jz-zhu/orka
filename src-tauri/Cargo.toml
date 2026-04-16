@@ -4,10 +4,15 @@ version = "0.1.0"
 description = "A Tauri App"
 authors = ["you"]
 edition = "2021"
+default-run = "orka"
 
 [lib]
 name = "orka_lib"
 crate-type = ["staticlib", "cdylib", "rlib"]
+
+[[bin]]
+name = "orka-cli"
+path = "src/bin/orka.rs"
 
 [build-dependencies]
 tauri-build = { version = "2", features = [] }
@@ -22,3 +27,8 @@ tokio = { version = "1", features = ["process", "io-util", "fs", "sync", "rt", "
 dirs = "5"
 libc = "0.2"
 notify = "6"
+reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "json"] }
+comrak = { version = "0.29", default-features = false }
+sha2 = "0.10"
+clap = { version = "4", features = ["derive"] }
+chrono = "0.4"

@@ -24,8 +24,35 @@ function showCrash(where: string, err: unknown) {
   }
 }
 
-window.addEventListener("error", (e) => showCrash("error", e.error ?? e.message));
-window.addEventListener("unhandledrejection", (e) => showCrash("rejection", e.reason));
+/** Errors the browser surfaces but that are NOT fatal — they should not
+ * replace the whole UI with a crash screen. The classic offender is
+ * ResizeObserver's "loop completed with undelivered notifications" warning,
+ * which fires whenever a layout thrash happens (very common with ReactFlow
+ * during parallel node updates). */
+function isBenignError(msg: string): boolean {
+  return (
+    msg.includes("ResizeObserver loop") ||
+    msg.includes("ResizeObserver loop completed") ||
+    msg.includes("Non-Error promise rejection captured")
+  );
+}
+
+window.addEventListener("error", (e) => {
+  const msg = String(e.message ?? e.error ?? "");
+  if (isBenignError(msg)) {
+    e.preventDefault();
+    return;
+  }
+  showCrash("error", e.error ?? e.message);
+});
+window.addEventListener("unhandledrejection", (e) => {
+  const msg = String(e.reason instanceof Error ? e.reason.message : e.reason);
+  if (isBenignError(msg)) {
+    e.preventDefault();
+    return;
+  }
+  showCrash("rejection", e.reason);
+});
 
 try {
   const el = document.getElementById("root");

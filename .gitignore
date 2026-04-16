@@ -40,3 +40,19 @@ src-tauri/gen/
 # Claude Code local state (per-dev, not code)
 .claude/
 
+
+# Demo build artifacts (keep only final + scripts)
+demo-output/*.webm
+demo-output/*.aac
+demo-output/*-silent.mp4
+demo-output/v[0-9]*
+demo-output/cl*
+demo-output/clean-*
+demo-output/synced-*
+demo-output/final-*
+demo-output/voice/
+demo-output/voice-*/
+demo-output/voice-clean/
+demo-output/frames/
+demo-output/timing/
+demo-output/voiceover-*

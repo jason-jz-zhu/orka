@@ -1,0 +1,34 @@
+import { create } from "zustand";
+import { invokeCmd } from "./tauri";
+
+export type RunRecord = {
+  id: string;
+  skill: string;
+  inputs: string[];
+  started_at: string;
+  ended_at?: string;
+  duration_ms?: number;
+  status: string;
+  trigger: string;
+  error_message?: string;
+};
+
+type RunsState = {
+  runs: RunRecord[];
+  loading: boolean;
+  refresh: () => Promise<void>;
+};
+
+export const useRuns = create<RunsState>((set) => ({
+  runs: [],
+  loading: true,
+  refresh: async () => {
+    try {
+      const list = await invokeCmd<RunRecord[]>("list_runs", { limit: 200 });
+      set({ runs: list, loading: false });
+    } catch (e) {
+      console.warn("list_runs failed:", e);
+      set({ loading: false });
+    }
+  },
+}));

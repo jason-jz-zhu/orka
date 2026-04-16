@@ -1,10 +1,15 @@
+mod dest_profiles;
+mod destinations;
 mod graph;
 mod kb;
 mod node_runner;
 mod onboarding;
 mod pipeline_gen;
+mod run_log;
 mod schedules;
 mod sessions;
+pub mod skill_md;
+mod skills;
 mod workspace;
 
 use node_runner::NodeMode;
@@ -162,6 +167,33 @@ async fn write_output_file(path: String, content: String) -> Result<String, Stri
     Ok(abs)
 }
 
+/// Read a UTF-8 text file. Used by PipelineLibrary "Import from file".
+#[tauri::command]
+async fn read_file_text(path: String) -> Result<String, String> {
+    tokio::fs::read_to_string(&path)
+        .await
+        .map_err(|e| format!("read {}: {e}", path))
+}
+
+/// Fetch a URL and return its body as text. Used by PipelineLibrary
+/// "Import from URL" — typically a raw GitHub gist or repo file URL.
+#[tauri::command]
+async fn fetch_text_url(url: String) -> Result<String, String> {
+    let url = url.trim();
+    if !url.starts_with("http://") && !url.starts_with("https://") {
+        return Err("URL must start with http:// or https://".into());
+    }
+    let client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(30))
+        .build()
+        .map_err(|e| e.to_string())?;
+    let resp = client.get(url).send().await.map_err(|e| e.to_string())?;
+    if !resp.status().is_success() {
+        return Err(format!("HTTP {}: {}", resp.status().as_u16(), url));
+    }
+    resp.text().await.map_err(|e| e.to_string())
+}
+
 /// Default output directory for the active workspace's pipelines.
 /// Lazy-creates `~/OrkaCanvas/<workspace>/outputs/` and returns its absolute path.
 #[tauri::command]
@@ -169,6 +201,30 @@ fn outputs_dir() -> Result<String, String> {
     let dir = workspace::workspace_root().join("outputs");
     std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
     Ok(dir.to_string_lossy().to_string())
+}
+
+/// Activate (and launch if needed) a macOS app by display name via
+/// LaunchServices. Used by output nodes for "Open Notes.app" etc — works
+/// regardless of where the .app bundle physically lives.
+#[tauri::command]
+async fn open_app_by_name(name: String) -> Result<(), String> {
+    #[cfg(target_os = "macos")]
+    {
+        let s = tokio::process::Command::new("open")
+            .args(["-a", &name])
+            .status()
+            .await
+            .map_err(|e| e.to_string())?;
+        if s.success() {
+            return Ok(());
+        }
+        return Err(format!("open -a {name} failed (exit {:?})", s.code()));
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        let _ = name;
+        Err("open_app_by_name only supported on macOS".into())
+    }
 }
 
 #[tauri::command]
@@ -316,6 +372,548 @@ async fn load_template(name: String) -> Result<String, String> {
         .map_err(|e| e.to_string())
 }
 
+/// Generate a Claude Code skill at `<target_dir>/<sanitised>/` from a saved
+/// Orka pipeline template. Creates SKILL.md (instructions for Claude) +
+/// pipeline.json (the original template). Returns the absolute skill dir.
+///
+/// `target_dir` is the PARENT of the skill folder. Common choices:
+///   - Global:        `~/.claude/skills`
+///   - Project-local: `<project-root>/.claude/skills`
+///   - Bundle:        any folder (not auto-discovered by Claude)
+#[tauri::command]
+async fn export_pipeline_as_skill(
+    name: String,
+    target_dir: String,
+) -> Result<String, String> {
+    // Claude skill names must be filesystem-safe ASCII. Non-ASCII titles
+    // (Chinese, emoji, …) get a timestamped fallback so the export still
+    // succeeds — the caller sees the final slug in the return value.
+    let raw: String = name
+        .chars()
+        .map(|c| {
+            if c.is_ascii_alphanumeric() || c == '-' || c == '_' {
+                c.to_ascii_lowercase()
+            } else {
+                '-'
+            }
+        })
+        .collect::<String>();
+    let mut safe: String = raw
+        .split('-')
+        .filter(|s| !s.is_empty())
+        .collect::<Vec<_>>()
+        .join("-");
+    if safe.is_empty() {
+        let ts = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_secs())
+            .unwrap_or(0);
+        safe = format!("orka-pipeline-{ts}");
+    }
+
+    // Read template content from disk so we don't need to re-validate.
+    let tpl_path = workspace::templates_dir().join(format!("{name}.json"));
+    let content = tokio::fs::read_to_string(&tpl_path)
+        .await
+        .map_err(|e| format!("read template: {e}"))?;
+
+    // Parse to extract description + node summary for the SKILL.md body.
+    let parsed: serde_json::Value =
+        serde_json::from_str(&content).map_err(|e| format!("parse: {e}"))?;
+    let raw_description = parsed
+        .get("description")
+        .and_then(|v| v.as_str())
+        .unwrap_or("")
+        .trim()
+        .to_string();
+    let inputs = parsed
+        .get("inputs")
+        .and_then(|v| v.as_array())
+        .cloned()
+        .unwrap_or_default();
+    let nodes = parsed
+        .get("nodes")
+        .and_then(|v| v.as_array())
+        .cloned()
+        .unwrap_or_default();
+    let edges = parsed
+        .get("edges")
+        .and_then(|v| v.as_array())
+        .cloned()
+        .unwrap_or_default();
+
+    // Expand `~` at the start so callers can pass "~/.claude/skills".
+    let target = if let Some(stripped) = target_dir.strip_prefix("~/") {
+        dirs::home_dir()
+            .ok_or("no home dir")?
+            .join(stripped)
+    } else if target_dir == "~" {
+        dirs::home_dir().ok_or("no home dir")?
+    } else {
+        std::path::PathBuf::from(&target_dir)
+    };
+    let skill_dir = target.join(&safe);
+    tokio::fs::create_dir_all(&skill_dir)
+        .await
+        .map_err(|e| format!("mkdir: {e}"))?;
+
+    // Build quick lookup + topological order over (nodes, edges) so the
+    // SKILL.md walks the DAG in execution order and each step can reference
+    // its upstream steps by number.
+    use std::collections::{HashMap, VecDeque};
+    let node_ids: Vec<String> = nodes
+        .iter()
+        .filter_map(|n| n.get("id").and_then(|v| v.as_str()).map(String::from))
+        .collect();
+    let by_id: HashMap<String, &serde_json::Value> = nodes
+        .iter()
+        .filter_map(|n| n.get("id").and_then(|v| v.as_str()).map(|id| (id.to_string(), n)))
+        .collect();
+    let mut parents: HashMap<String, Vec<String>> = HashMap::new();
+    let mut children: HashMap<String, Vec<String>> = HashMap::new();
+    let mut indeg: HashMap<String, usize> = HashMap::new();
+    for id in &node_ids {
+        indeg.insert(id.clone(), 0);
+        parents.insert(id.clone(), Vec::new());
+        children.insert(id.clone(), Vec::new());
+    }
+    for e in &edges {
+        let s = e.get("source").and_then(|v| v.as_str()).unwrap_or("");
+        let t = e.get("target").and_then(|v| v.as_str()).unwrap_or("");
+        if s.is_empty() || t.is_empty() {
+            continue;
+        }
+        parents.entry(t.to_string()).or_default().push(s.to_string());
+        children.entry(s.to_string()).or_default().push(t.to_string());
+        *indeg.entry(t.to_string()).or_insert(0) += 1;
+    }
+    let mut queue: VecDeque<String> = node_ids
+        .iter()
+        .filter(|id| indeg.get(*id).copied().unwrap_or(0) == 0)
+        .cloned()
+        .collect();
+    let mut topo: Vec<String> = Vec::new();
+    while let Some(id) = queue.pop_front() {
+        topo.push(id.clone());
+        if let Some(ch) = children.get(&id).cloned() {
+            for c in ch {
+                if let Some(d) = indeg.get_mut(&c) {
+                    *d = d.saturating_sub(1);
+                    if *d == 0 {
+                        queue.push_back(c);
+                    }
+                }
+            }
+        }
+    }
+    // Append any leftover (e.g. cycles) in original order so nothing is lost.
+    for id in &node_ids {
+        if !topo.contains(id) {
+            topo.push(id.clone());
+        }
+    }
+    let step_of: HashMap<String, usize> = topo
+        .iter()
+        .enumerate()
+        .map(|(i, id)| (id.clone(), i + 1))
+        .collect();
+
+    // Synthesize a useful description when the template didn't set one —
+    // Claude's skill router uses this field to decide when to invoke.
+    let first_prompt: Option<String> = topo
+        .iter()
+        .filter_map(|id| by_id.get(id).copied())
+        .filter_map(|n| {
+            let kind = n.get("type").and_then(|v| v.as_str()).unwrap_or("");
+            if kind == "chat" || kind == "agent" {
+                n.get("data")
+                    .and_then(|d| d.get("prompt"))
+                    .and_then(|p| p.as_str())
+                    .map(|s| s.trim().to_string())
+            } else {
+                None
+            }
+        })
+        .find(|p| !p.is_empty());
+    let description = if !raw_description.is_empty() {
+        raw_description.clone()
+    } else if let Some(p) = &first_prompt {
+        let first_line = p.lines().next().unwrap_or("").trim();
+        let truncated: String = if first_line.chars().count() > 140 {
+            let cut: String = first_line.chars().take(140).collect();
+            format!("{cut}…")
+        } else {
+            first_line.to_string()
+        };
+        format!("{truncated} (Use when the user wants to: {truncated})")
+    } else {
+        format!("Multi-step workflow \"{name}\". Use when the user asks to run \"{name}\".")
+    };
+
+    // Build SKILL.md.
+    let mut md = String::new();
+    md.push_str("---\n");
+    md.push_str(&format!("name: {safe}\n"));
+    md.push_str(&format!(
+        "description: {}\n",
+        description.replace('\n', " ").trim()
+    ));
+    md.push_str("---\n\n");
+    md.push_str(&format!("# {name}\n\n"));
+    if !raw_description.is_empty() {
+        md.push_str(&raw_description);
+        md.push_str("\n\n");
+    }
+    md.push_str(
+        "This skill executes a multi-step workflow. Follow the steps below in order. Each step lists which prior steps' outputs to include as context.\n\n",
+    );
+
+    if !inputs.is_empty() {
+        md.push_str("## Inputs\n\nBefore starting, collect these values from the user (skip any they've already provided, use defaults where shown):\n\n");
+        for inp in &inputs {
+            let n = inp.get("name").and_then(|v| v.as_str()).unwrap_or("?");
+            let d = inp
+                .get("description")
+                .and_then(|v| v.as_str())
+                .unwrap_or("");
+            let def = inp.get("default").and_then(|v| v.as_str()).unwrap_or("");
+            md.push_str(&format!("- **`{{{{{n}}}}}`**"));
+            if !d.is_empty() {
+                md.push_str(&format!(" — {d}"));
+            }
+            if !def.is_empty() {
+                md.push_str(&format!(" (default: `{def}`)"));
+            }
+            md.push('\n');
+        }
+        md.push_str("\nSubstitute each `{{name}}` placeholder in the prompts below with the user's value before executing that step.\n\n");
+    }
+
+    md.push_str("## Steps\n\n");
+    let mut step_num = 0;
+    let mut any_exec_step = false;
+    for id in &topo {
+        let Some(node) = by_id.get(id) else { continue };
+        let kind = node.get("type").and_then(|v| v.as_str()).unwrap_or("?");
+        let data = node.get("data").cloned().unwrap_or(serde_json::Value::Null);
+        let parent_ids = parents.get(id).cloned().unwrap_or_default();
+        let context_note = if parent_ids.is_empty() {
+            "(this is an entry step — no prior context)".to_string()
+        } else {
+            let refs: Vec<String> = parent_ids
+                .iter()
+                .filter_map(|pid| step_of.get(pid).map(|n| format!("step {n}")))
+                .collect();
+            if refs.is_empty() {
+                "(no prior context)".to_string()
+            } else {
+                format!("use the output(s) from {} as context", refs.join(", "))
+            }
+        };
+
+        match kind {
+            "chat" | "agent" => {
+                let prompt = data
+                    .get("prompt")
+                    .and_then(|p| p.as_str())
+                    .unwrap_or("")
+                    .trim();
+                if prompt.is_empty() {
+                    continue;
+                }
+                step_num += 1;
+                any_exec_step = true;
+                let label = if kind == "agent" {
+                    "agent (delegate with full tool access — file edits, shell, etc.)"
+                } else {
+                    "chat (reason and produce text; no side effects)"
+                };
+                md.push_str(&format!("### Step {step_num} — {label}\n\n"));
+                md.push_str(&format!("**Context:** {context_note}.\n\n"));
+                md.push_str("**Prompt:**\n\n```\n");
+                md.push_str(prompt);
+                md.push_str("\n```\n\n");
+            }
+            "kb" => {
+                let dir = data.get("dir").and_then(|v| v.as_str()).unwrap_or("");
+                let files: Vec<String> = data
+                    .get("files")
+                    .and_then(|v| v.as_array())
+                    .map(|arr| {
+                        arr.iter()
+                            .filter_map(|f| f.as_str().map(String::from))
+                            .collect()
+                    })
+                    .unwrap_or_default();
+                if dir.is_empty() && files.is_empty() {
+                    continue;
+                }
+                step_num += 1;
+                any_exec_step = true;
+                md.push_str(&format!("### Step {step_num} — knowledge base\n\n"));
+                md.push_str("**Context:** load these files and keep their contents available as context for the remaining steps.\n\n");
+                if !dir.is_empty() {
+                    md.push_str(&format!("Directory: `{dir}`\n\n"));
+                }
+                if !files.is_empty() {
+                    md.push_str("Files:\n");
+                    for f in &files {
+                        md.push_str(&format!("- `{f}`\n"));
+                    }
+                    md.push('\n');
+                }
+            }
+            "pipeline_ref" => {
+                let sub = data
+                    .get("pipelineName")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("?");
+                let bindings = data
+                    .get("inputBindings")
+                    .and_then(|v| v.as_object())
+                    .cloned()
+                    .unwrap_or_default();
+                step_num += 1;
+                any_exec_step = true;
+                md.push_str(&format!(
+                    "### Step {step_num} — run sub-pipeline `{sub}`\n\n"
+                ));
+                md.push_str(&format!("**Context:** {context_note}.\n\n"));
+                if !bindings.is_empty() {
+                    md.push_str("Inputs to pass:\n");
+                    for (k, v) in &bindings {
+                        let s = v.as_str().unwrap_or("");
+                        md.push_str(&format!("- `{k}` = `{s}`\n"));
+                    }
+                    md.push('\n');
+                }
+                md.push_str(&format!(
+                    "If the `{sub}` skill is available, invoke it. Otherwise execute its steps inline from its SKILL.md.\n\n"
+                ));
+            }
+            "output" => {
+                let dest = data
+                    .get("destination")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("local");
+                let fmt = data
+                    .get("format")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("markdown");
+                step_num += 1;
+                any_exec_step = true;
+                md.push_str(&format!("### Step {step_num} — write output\n\n"));
+                md.push_str(&format!(
+                    "**Context:** combine the output(s) from {} into a single {fmt} document.\n\n",
+                    if parent_ids.is_empty() {
+                        "the previous step".to_string()
+                    } else {
+                        parent_ids
+                            .iter()
+                            .filter_map(|pid| step_of.get(pid).map(|n| format!("step {n}")))
+                            .collect::<Vec<_>>()
+                            .join(", ")
+                    }
+                ));
+                let detail = match dest {
+                    "local" => {
+                        let dir = data.get("dir").and_then(|v| v.as_str()).unwrap_or("");
+                        let file = data
+                            .get("filename")
+                            .and_then(|v| v.as_str())
+                            .unwrap_or("output");
+                        if dir.is_empty() {
+                            format!("Write to file `{file}` (ask the user where if unsure).")
+                        } else {
+                            format!("Write to `{dir}/{file}`.")
+                        }
+                    }
+                    "icloud" => {
+                        let file = data
+                            .get("filename")
+                            .and_then(|v| v.as_str())
+                            .unwrap_or("output");
+                        format!("Write to iCloud Drive: `~/Library/Mobile Documents/com~apple~CloudDocs/Orka/{file}`.")
+                    }
+                    "notes" => {
+                        let title = data
+                            .get("notesTitle")
+                            .and_then(|v| v.as_str())
+                            .unwrap_or("Orka output");
+                        format!("Append to Apple Notes note titled `{title}` (use AppleScript/JXA or tell the user to copy in).")
+                    }
+                    "webhook" => {
+                        let url = data
+                            .get("webhookUrl")
+                            .and_then(|v| v.as_str())
+                            .unwrap_or("");
+                        if url.is_empty() {
+                            "POST the document to a user-provided webhook URL.".to_string()
+                        } else {
+                            format!("POST the document to `{url}`.")
+                        }
+                    }
+                    "shell" => {
+                        let cmd = data
+                            .get("shellCommand")
+                            .and_then(|v| v.as_str())
+                            .unwrap_or("");
+                        format!(
+                            "Run shell command (replace `$CONTENT` with the document):\n\n```\n{cmd}\n```"
+                        )
+                    }
+                    "profile" => {
+                        let pid = data
+                            .get("profileId")
+                            .and_then(|v| v.as_str())
+                            .unwrap_or("?");
+                        format!("Route through the destination profile `{pid}` (configured in Orka Settings).")
+                    }
+                    other => format!("Destination: `{other}`."),
+                };
+                md.push_str(&detail);
+                md.push_str("\n\n");
+            }
+            _ => {}
+        }
+    }
+    if !any_exec_step {
+        md.push_str("_(This pipeline has no executable steps yet — add chat/agent nodes with prompts in Orka, then re-export.)_\n\n");
+    }
+
+    md.push_str("---\n\n");
+    md.push_str("_Generated from an Orka pipeline. The sibling `pipeline.json` file is the original visual-canvas definition — you can ignore it when executing this skill._\n");
+
+    let skill_md_path = skill_dir.join("SKILL.md");
+    let pipeline_json_path = skill_dir.join("pipeline.json");
+    tokio::fs::write(&skill_md_path, md)
+        .await
+        .map_err(|e| format!("write SKILL.md: {e}"))?;
+    tokio::fs::write(&pipeline_json_path, content)
+        .await
+        .map_err(|e| format!("write pipeline.json: {e}"))?;
+    Ok(skill_dir.to_string_lossy().to_string())
+}
+
+#[tauri::command]
+fn list_available_skills() -> Vec<skills::SkillMeta> {
+    skills::scan_skills_dirs()
+}
+
+#[tauri::command]
+fn get_skill_detail(slug: String) -> Result<skills::SkillMeta, String> {
+    skills::get_skill(&slug)
+}
+
+#[tauri::command]
+fn list_runs(limit: Option<usize>) -> Vec<run_log::RunRecord> {
+    run_log::list_runs(limit.unwrap_or(200))
+}
+
+#[tauri::command]
+fn append_run(record: run_log::RunRecord) -> Result<(), String> {
+    run_log::append_run(&record)
+}
+
+#[tauri::command]
+fn get_run(id: String) -> Result<run_log::RunRecord, String> {
+    run_log::get_run(&id).ok_or_else(|| format!("run '{id}' not found"))
+}
+
+/// Load a SKILL.md from any path and return parsed graph data as JSON for the canvas.
+#[tauri::command]
+async fn load_skill_md(path: String) -> Result<String, String> {
+    let parsed = skill_md::parse_skill_md(std::path::Path::new(&path))
+        .map_err(|e| format!("parse: {e}"))?;
+
+    let mut result = serde_json::Map::new();
+    result.insert("name".into(), serde_json::Value::String(parsed.name));
+    result.insert("description".into(), serde_json::Value::String(parsed.description));
+
+    let inputs_json: Vec<serde_json::Value> = parsed.inputs.iter().map(|i| {
+        let mut m = serde_json::Map::new();
+        m.insert("name".into(), serde_json::Value::String(i.name.clone()));
+        m.insert("type".into(), serde_json::Value::String(i.input_type.clone()));
+        if let Some(d) = &i.default { m.insert("default".into(), serde_json::Value::String(d.clone())); }
+        if let Some(d) = &i.description { m.insert("description".into(), serde_json::Value::String(d.clone())); }
+        serde_json::Value::Object(m)
+    }).collect();
+    result.insert("inputs".into(), serde_json::Value::Array(inputs_json));
+
+    let drift = match parsed.drift {
+        skill_md::DriftStatus::NoDrift => "none",
+        skill_md::DriftStatus::Drifted => "drifted",
+        skill_md::DriftStatus::NoGraph => "no_graph",
+    };
+    result.insert("drift".into(), serde_json::Value::String(drift.into()));
+
+    if let Some(graph) = &parsed.graph {
+        let graph_val: serde_json::Value = serde_json::from_str(&graph.raw_json)
+            .unwrap_or(serde_json::Value::Null);
+        result.insert("graph".into(), graph_val);
+    }
+
+    serde_json::to_string(&result).map_err(|e| format!("serialize: {e}"))
+}
+
+/// Save a single canvas node as a standalone atomic SKILL.md.
+#[tauri::command]
+async fn save_node_as_skill(
+    node_json: String,
+    name: String,
+    target_dir: String,
+) -> Result<String, String> {
+    let node: serde_json::Value = serde_json::from_str(&node_json)
+        .map_err(|e| format!("parse node: {e}"))?;
+    let node_type = node.get("type").and_then(|v| v.as_str()).unwrap_or("agent");
+    let prompt = node.get("data")
+        .and_then(|d| d.get("prompt"))
+        .and_then(|p| p.as_str())
+        .unwrap_or("");
+
+    if prompt.trim().is_empty() {
+        return Err("node has no prompt to export".into());
+    }
+
+    let safe: String = name.chars()
+        .map(|c| if c.is_ascii_alphanumeric() || c == '-' || c == '_' { c.to_ascii_lowercase() } else { '-' })
+        .collect::<String>()
+        .split('-').filter(|s| !s.is_empty()).collect::<Vec<_>>().join("-");
+    let safe = if safe.is_empty() {
+        let ts = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0);
+        format!("orka-skill-{ts}")
+    } else { safe };
+
+    let target = if let Some(stripped) = target_dir.strip_prefix("~/") {
+        dirs::home_dir().ok_or("no home dir")?.join(stripped)
+    } else if target_dir == "~" {
+        dirs::home_dir().ok_or("no home dir")?
+    } else {
+        std::path::PathBuf::from(&target_dir)
+    };
+
+    let skill_dir = target.join(&safe);
+    tokio::fs::create_dir_all(&skill_dir).await.map_err(|e| format!("mkdir: {e}"))?;
+
+    let allowed = if node_type == "agent" { "Read, Write, Bash" } else { "" };
+    let mut md = String::new();
+    md.push_str("---\n");
+    md.push_str(&format!("name: {safe}\n"));
+    md.push_str(&format!("description: Extracted from Orka node. {}\n", prompt.lines().next().unwrap_or("").chars().take(80).collect::<String>()));
+    if !allowed.is_empty() {
+        md.push_str(&format!("allowed-tools: {allowed}\n"));
+    }
+    md.push_str("orka:\n  schema: 1\n");
+    md.push_str("---\n\n");
+    md.push_str(&format!("# {name}\n\n"));
+    md.push_str(prompt.trim());
+    md.push('\n');
+
+    let skill_md_path = skill_dir.join("SKILL.md");
+    tokio::fs::write(&skill_md_path, md).await.map_err(|e| format!("write: {e}"))?;
+    Ok(skill_dir.to_string_lossy().to_string())
+}
+
 #[tauri::command]
 async fn delete_template(app: AppHandle, name: String) -> Result<(), String> {
     // Guard against path traversal — only a simple filename is accepted.
@@ -371,6 +969,20 @@ pub fn run() {
             generate_pipeline,
             write_output_file,
             outputs_dir,
+            read_file_text,
+            fetch_text_url,
+            destinations::icloud_orka_path,
+            destinations::write_to_icloud,
+            destinations::append_to_apple_note,
+            destinations::markdown_to_html,
+            destinations::post_to_webhook,
+            destinations::run_shell_destination,
+            dest_profiles::list_destination_profiles,
+            dest_profiles::save_destination_profile,
+            dest_profiles::delete_destination_profile,
+            dest_profiles::get_destination_profile,
+            dest_profiles::test_wework_webhook,
+            dest_profiles::send_via_profile,
             schedules::list_schedules,
             schedules::get_schedule,
             schedules::save_schedule,
@@ -378,6 +990,7 @@ pub fn run() {
             schedules::os_notify,
             open_in_vscode,
             open_in_terminal,
+            open_app_by_name,
             list_workspaces,
             active_workspace,
             create_workspace,
@@ -389,6 +1002,14 @@ pub fn run() {
             save_template,
             load_template,
             delete_template,
+            export_pipeline_as_skill,
+            list_available_skills,
+            get_skill_detail,
+            load_skill_md,
+            save_node_as_skill,
+            list_runs,
+            get_run,
+            append_run,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

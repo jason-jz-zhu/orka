@@ -18,6 +18,7 @@ type Props = NodeProps<Extract<OrkaNode, { type: "chat" | "agent" }>> & {
 export default function ChatNode({ id, data, variant = "chat" }: Props) {
   const update = useGraph((s) => s.updateNodeData);
   const [replyText, setReplyText] = useState("");
+  const [outputExpanded, setOutputExpanded] = useState(false);
 
   // Subscribe to stream + done events from the Rust side (or browser fallback).
   useEffect(() => {
@@ -183,12 +184,23 @@ export default function ChatNode({ id, data, variant = "chat" }: Props) {
     <div className={`chat-node chat-node--${variant} ${stateClass}`}>
       <Handle type="target" position={Position.Left} />
       <div className="chat-node__header">
-        {label} · {id}
-        {typeof data.toolCount === "number" && data.toolCount > 0 && (
-          <span className="chat-node__tools">
-            {" "}· 🔧 {data.toolCount} {data.toolCount === 1 ? "tool" : "tools"}
+        <span className="chat-node__header-label">
+          {label} · {id}
+          {typeof data.toolCount === "number" && data.toolCount > 0 && (
+            <span className="chat-node__tools">
+              {" "}· 🔧 {data.toolCount} {data.toolCount === 1 ? "tool" : "tools"}
+            </span>
+          )}
+        </span>
+        {data.running ? (
+          <span className="chat-node__badge chat-node__badge--running">
+            ⋯ running
           </span>
-        )}
+        ) : hasError ? (
+          <span className="chat-node__badge chat-node__badge--err">✗ error</span>
+        ) : data.output ? (
+          <span className="chat-node__badge chat-node__badge--done">✓ done</span>
+        ) : null}
       </div>
       <textarea
         className="chat-node__input nodrag nowheel"
@@ -233,12 +245,23 @@ export default function ChatNode({ id, data, variant = "chat" }: Props) {
       </div>
       {data.output && (
         <div
-          className="chat-node__output chat-node__output--md nodrag nowheel"
+          className={
+            "chat-node__output chat-node__output--md nodrag nowheel" +
+            (outputExpanded ? " chat-node__output--expanded" : "")
+          }
           onWheelCapture={(e) => e.stopPropagation()}
         >
           <ReactMarkdown remarkPlugins={[remarkGfm]}>
             {data.output}
           </ReactMarkdown>
+          {data.output.length > 200 && (
+            <button
+              className="chat-node__output-toggle"
+              onClick={() => setOutputExpanded(!outputExpanded)}
+            >
+              {outputExpanded ? "Show less" : "Show more..."}
+            </button>
+          )}
         </div>
       )}
       {data.lastSessionId && data.output && !data.running && (

@@ -34,16 +34,37 @@ export function buildContext(
       if (out && out.trim()) {
         chunks.push(`[from ${node.type} node ${id}]\n${out.trim()}`);
       }
+    } else if (node.type === "pipeline_ref") {
+      const out = (node.data as any).output;
+      const subName = (node.data as any).pipelineName ?? "?";
+      if (out && out.trim()) {
+        chunks.push(`[from sub-pipeline ${subName} (node ${id})]\n${out.trim()}`);
+      }
     } else if (node.type === "kb") {
-      const files: string[] = (node.data as any).files ?? [];
-      const dir: string = (node.data as any).dir ?? "";
-      if (dir && !addDirs.includes(dir)) addDirs.push(dir);
-      if (files.length > 0) {
-        chunks.push(
-          `[knowledge base node ${id}]\nFiles available at ${dir}:\n${files
-            .map((f) => `- ${f}`)
-            .join("\n")}`
-        );
+      const source: string = (node.data as any).source ?? "folder";
+      if (source === "folder") {
+        const files: string[] = (node.data as any).files ?? [];
+        const dir: string = (node.data as any).dir ?? "";
+        if (dir && !addDirs.includes(dir)) addDirs.push(dir);
+        if (files.length > 0) {
+          chunks.push(
+            `[input node ${id} — folder]\nFiles available at ${dir}:\n${files
+              .map((f) => `- ${f}`)
+              .join("\n")}`
+          );
+        }
+      } else if (source === "url") {
+        const fetched: string = (node.data as any).fetchedContent ?? "";
+        if (fetched.trim()) {
+          chunks.push(`[input node ${id} — url]\n${fetched.trim()}`);
+        }
+      } else if (source === "clipboard") {
+        chunks.push(`[input node ${id} — clipboard]\n(clipboard content will be injected at runtime)`);
+      } else if (source === "text") {
+        const text: string = (node.data as any).manualText ?? "";
+        if (text.trim()) {
+          chunks.push(`[input node ${id} — text]\n${text.trim()}`);
+        }
       }
     }
   }
