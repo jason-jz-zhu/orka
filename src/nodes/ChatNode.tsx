@@ -1,7 +1,5 @@
 import { useEffect, useState } from "react";
 import { Handle, Position, type NodeProps } from "@xyflow/react";
-import ReactMarkdown from "react-markdown";
-import remarkGfm from "remark-gfm";
 import { save as saveDialog } from "@tauri-apps/plugin-dialog";
 import { invokeCmd, listenEvent } from "../lib/tauri";
 import { parseLine } from "../lib/stream-parser";
@@ -15,6 +13,7 @@ import {
 } from "../lib/graph-store";
 import { alertDialog } from "../lib/dialogs";
 import { waitForDone } from "../lib/run-all";
+import { OutputAnnotator } from "../components/OutputAnnotator";
 
 
 type Props = NodeProps<Extract<OrkaNode, { type: "chat" | "agent" }>> & {
@@ -298,9 +297,14 @@ export default function ChatNode({ id, data, variant = "chat" }: Props) {
           }
           onWheelCapture={(e) => e.stopPropagation()}
         >
-          <ReactMarkdown remarkPlugins={[remarkGfm]}>
-            {data.output}
-          </ReactMarkdown>
+          <OutputAnnotator
+            markdown={data.output}
+            runId={id}
+            onAnnotate={(block) => {
+              // Day-1 scope: log the target. Day-2 will wire the annotation sidebar.
+              console.log("[annotator] clicked block", { nodeId: id, idx: block.idx, type: block.type });
+            }}
+          />
           {data.output.length > 200 && (
             <button
               className="chat-node__output-toggle"

@@ -2064,6 +2064,132 @@ html, body, #root { margin: 0; height: 100%; }
   padding: 4px 0;
 }
 
+/* ==========================================================================
+   OutputAnnotator · block-level markdown rendering with per-block 💬 indicator.
+   Each BlockCard is a hover-responsive row; the indicator slides in on hover,
+   stays visible when an annotation is saved or when the card is "active"
+   (its annotation panel is open).
+   ========================================================================== */
+
+.output-annotator {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  font-size: 12px;
+  line-height: 1.55;
+  color: #e6e6e6;
+}
+
+.block-card {
+  position: relative;
+  padding: 4px 28px 4px 8px; /* right padding reserves room for the 💬 button */
+  border-radius: 6px;
+  transition: background 0.12s ease;
+}
+.block-card:hover {
+  background: rgba(255, 255, 255, 0.03);
+}
+.block-card--active {
+  background: rgba(59, 130, 246, 0.08);
+  outline: 1px solid rgba(59, 130, 246, 0.35);
+}
+.block-card--annotated {
+  background: rgba(96, 165, 250, 0.05);
+  border-left: 2px solid #3b82f6;
+  padding-left: 10px;
+}
+
+.block-card__indicator {
+  position: absolute;
+  top: 4px;
+  right: 4px;
+  width: 22px;
+  height: 22px;
+  padding: 0;
+  border: none;
+  border-radius: 4px;
+  background: rgba(255, 255, 255, 0.06);
+  color: #a8b0bf;
+  font-size: 12px;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  opacity: 0.7;
+  transition: opacity 0.15s ease, background 0.15s ease;
+}
+.block-card__indicator:hover {
+  opacity: 1;
+  background: rgba(96, 165, 250, 0.18);
+}
+.block-card__indicator--has {
+  opacity: 1;
+  background: rgba(59, 130, 246, 0.22);
+  color: #93c5fd;
+}
+
+/* Body styling by block type */
+.block-card__body > *:first-child { margin-top: 0; }
+.block-card__body > *:last-child { margin-bottom: 0; }
+
+.block-card__paragraph p { margin: 0; }
+
+.block-card__heading {
+  color: #e6e6e6;
+  margin: 0;
+  font-weight: 700;
+  line-height: 1.3;
+}
+h1.block-card__heading { font-size: 16px; border-bottom: 1px solid #22262e; padding-bottom: 4px; }
+h2.block-card__heading { font-size: 14px; color: #9ab4ff; }
+h3.block-card__heading { font-size: 13px; }
+h4.block-card__heading { font-size: 12px; color: #a8b0bf; }
+h5.block-card__heading, h6.block-card__heading { font-size: 11px; color: #8a92a0; }
+
+.block-card__code {
+  margin: 0;
+  padding: 8px 10px;
+  background: #0a0d12;
+  border: 1px solid #22262e;
+  border-radius: 4px;
+  overflow-x: auto;
+  font-family: ui-monospace, SFMono-Regular, "SF Mono", Consolas, monospace;
+  font-size: 11px;
+  line-height: 1.45;
+}
+.block-card__code code { color: #c5d1e0; }
+
+.block-card__hr {
+  border: none;
+  border-top: 1px solid #22262e;
+  margin: 4px 0;
+}
+
+.block-card__bullet {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+}
+.block-card__bullet-marker {
+  color: #60a5fa;
+  font-weight: 700;
+  line-height: 1.55;
+  flex-shrink: 0;
+}
+.block-card__bullet-text { flex: 1; min-width: 0; }
+.block-card__bullet-text p { margin: 0 0 4px; }
+.block-card__bullet-text p:last-child { margin-bottom: 0; }
+
+.block-card__blockquote {
+  margin: 0;
+  padding: 4px 10px;
+  border-left: 3px solid #3b82f6;
+  background: rgba(59, 130, 246, 0.05);
+  color: #b4bccb;
+  font-style: italic;
+}
+.block-card__blockquote p { margin: 0; }
+
 /* Rendered-markdown variant — overrides the pre-wrap baseline so block
    elements lay out naturally. */
 .chat-node__output--md {
