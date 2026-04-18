@@ -1,6 +1,12 @@
-# Orka
+<p align="center">
+  <img src="assets/orka-icon-512.png" width="160" alt="Orka icon"/>
+</p>
 
-**Browse, visualize, schedule, and run AI skills — from a Mac app.**
+<h1 align="center">Orka</h1>
+
+<p align="center"><strong>Browse, visualize, schedule, and run AI skills — from a Mac app.</strong></p>
+
+<p align="center"><em>Orka = <strong>Orchestrate</strong>.</em></p>
 
 Author skills anywhere — Claude Code, ChatGPT, Cursor, or by hand. Orka is the management, execution, and observability layer that turns them into scheduled, monitored automations with native Mac output.
 
@@ -174,10 +180,12 @@ Key decisions:
 
 ## Docs
 
-- [Core Concepts](docs/CORE-CONCEPTS.md) — product philosophy and design principles
+- **[Orka Plan](docs/ORKA-PLAN.md)** — current strategic source of truth (vision, roadmap, metrics)
+- [Pain Points](docs/PAINS.md) — 6 user pains with UX clone targets and implementation spec
+- [Competition](docs/COMPETITION.md) — competitive coverage matrix and differentiation
 - [Skill Format](docs/SKILL-FORMAT.md) — SKILL.md specification (v1)
 - [Architecture](docs/ARCHITECTURE.md) — technical decisions and module map
-- [Strategy](docs/STRATEGY.md) — competitive positioning and business model
+- [Core Concepts](docs/CORE-CONCEPTS.md) — *(partially deprecated, preserved for history)*
 
 ---
 

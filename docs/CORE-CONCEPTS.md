@@ -1,5 +1,18 @@
 # Orka — Core Concepts
 
+> ⚠️ **DEPRECATED · 2026-04-18**
+>
+> Parts of this document are now out of date. The current product direction
+> removes **"pipeline" as a first-class concept** — everything is a skill
+> (atomic or composite). Canvas is no longer the hero feature; it appears
+> only when editing a composite skill. Three tabs: Skills / Sessions / Runs.
+>
+> **See [ORKA-PLAN.md](./ORKA-PLAN.md) for the current strategic source
+> of truth.** This document is preserved for historical context on the
+> original framing and the path that led to the simplification.
+
+---
+
 > A macOS app that lets you browse, visualize, edit, schedule, and run
 > Claude Code skills, with full run history.
 >

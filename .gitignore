@@ -40,6 +40,17 @@ src-tauri/gen/
 # Claude Code local state (per-dev, not code)
 .claude/
 
+# Private docs (not published — internal strategy, sensitive notes)
+docs/_private/
+
+# Icon build artifacts (intermediate iconset used by iconutil)
+assets/_icon_tmp/
+
+# Demo video build artifacts (committed finals only)
+demo-output/orka-demo-*.mp4
+demo-output/typing-sound.wav
+demo-output/short-cuts/
+
 
 # Demo build artifacts (keep only final + scripts)
 demo-output/*.webm
