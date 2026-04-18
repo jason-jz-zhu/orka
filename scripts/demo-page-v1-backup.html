@@ -563,177 +563,9 @@ body {
   transform-origin: center center;
   transition: transform 1s cubic-bezier(0.25, 0.46, 0.45, 0.94);
 }
-
-/* ─────────── global captions (muted-viewer friendly) ─────────── */
-.caption {
-  position: fixed;
-  bottom: 48px;
-  left: 50%;
-  transform: translateX(-50%);
-  max-width: 1100px;
-  padding: 10px 22px;
-  border-radius: 8px;
-  background: rgba(0,0,0,0.72);
-  color: #fff;
-  font-size: 22px;
-  font-weight: 500;
-  text-align: center;
-  letter-spacing: 0.1px;
-  text-shadow: 0 1px 4px rgba(0,0,0,0.9);
-  opacity: 0;
-  transition: opacity 0.35s ease;
-  pointer-events: none;
-  z-index: 200;
-  white-space: nowrap;
-}
-.caption.visible { opacity: 1; }
-
-/* ─────────── sidebar zoom hint "← Pick a pipeline" ─────────── */
-.sidebar-hint {
-  position: fixed;
-  top: 50%;
-  right: 12%;
-  transform: translateY(-50%);
-  color: #3b82f6;
-  font-size: 36px;
-  font-weight: 700;
-  letter-spacing: 0.2px;
-  text-shadow: 0 0 24px rgba(59,130,246,0.5);
-  opacity: 0;
-  transition: opacity 0.4s ease;
-  z-index: 210;
-  pointer-events: none;
-}
-.sidebar-hint.visible { opacity: 1; }
-
-/* ─────────── Flash Ahead preview (mini notes result) ─────────── */
-#s-flash {
-  background: #000;
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  justify-content: center;
-  gap: 20px;
-}
-.flash-label {
-  color: #3b82f6;
-  font-size: 16px;
-  font-weight: 600;
-  letter-spacing: 3px;
-  text-transform: uppercase;
-  opacity: 0;
-  transition: opacity 0.4s ease;
-}
-.flash-label.visible { opacity: 1; }
-.flash-mini {
-  width: 480px;
-  background: #1c1c1e;
-  border-radius: 10px;
-  box-shadow: 0 16px 60px rgba(59,130,246,0.18), 0 8px 30px rgba(0,0,0,0.6);
-  padding: 18px 22px;
-  opacity: 0;
-  transform: scale(0.94);
-  transition: opacity 0.5s ease, transform 0.5s ease;
-}
-.flash-mini.visible { opacity: 1; transform: scale(1); }
-.flash-mini-title {
-  font-size: 15px;
-  font-weight: 700;
-  color: #fff;
-  margin-bottom: 12px;
-  padding-bottom: 10px;
-  border-bottom: 1px solid #2c2c2e;
-}
-.flash-mini-body {
-  font-size: 12px;
-  line-height: 1.8;
-  color: #c5cdda;
-}
-.flash-mini-body .fm-green { color: #4ade80; }
-.flash-mini-body .fm-red { color: #f87171; }
-.flash-mini-body .fm-gray { color: #8b9ab0; font-style: italic; }
-
-/* ─────────── Runs tab flash ─────────── */
-#s-runs {
-  background: #0a0d14;
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  justify-content: center;
-  gap: 24px;
-}
-.runs-table-mock {
-  width: 780px;
-  background: #0e1118;
-  border: 1px solid #1a1f2e;
-  border-radius: 12px;
-  overflow: hidden;
-  box-shadow: 0 20px 60px rgba(0,0,0,0.6);
-  opacity: 0;
-  transform: translateY(12px);
-  transition: opacity 0.5s ease, transform 0.5s ease;
-}
-.runs-table-mock.visible { opacity: 1; transform: translateY(0); }
-.runs-header {
-  display: grid;
-  grid-template-columns: 2fr 1.5fr 1fr 1fr 1fr;
-  gap: 12px;
-  padding: 14px 24px;
-  background: #131720;
-  border-bottom: 1px solid #1a1f2e;
-  font-size: 11px;
-  font-weight: 700;
-  letter-spacing: 1px;
-  text-transform: uppercase;
-  color: #6b7a90;
-}
-.runs-row {
-  display: grid;
-  grid-template-columns: 2fr 1.5fr 1fr 1fr 1fr;
-  gap: 12px;
-  padding: 14px 24px;
-  border-bottom: 1px solid #131720;
-  font-size: 13px;
-  color: #c5cdda;
-}
-.runs-row:last-child { border-bottom: none; }
-.runs-status-ok {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  padding: 2px 10px;
-  border-radius: 10px;
-  background: #0d2d1a;
-  color: #4ade80;
-  font-size: 11px;
-  font-weight: 600;
-  width: fit-content;
-}
-.runs-cost { color: #4ade80; font-weight: 700; }
-
-/* End-card URL stacking + hold extension */
-.s8-urls {
-  display: flex;
-  flex-direction: column;
-  gap: 4px;
-  margin-top: 12px;
-  align-items: center;
-}
-.s8-url-line {
-  font-size: 14px;
-  color: #8b5cf6;
-  font-family: 'SF Mono', 'Fira Mono', monospace;
-}
-.s8-url-line.secondary { color: #6b7a90; }
 </style>
 </head>
 <body>
-
-<!-- Global caption (synced to voice-over, visible to muted viewers) -->
-<div class="caption" id="caption"></div>
-
-<!-- Sidebar zoom hint -->
-<div class="sidebar-hint" id="sidebar-hint">← Pick a pipeline</div>
 
 <!-- SCENE 1: Hook -->
 <div class="scene" id="s1">
@@ -748,21 +580,6 @@ body {
     <span class="prompt">&gt; </span><span id="tw-text"></span><span id="tw-cursor"></span>
   </div>
   <div class="s2-tagline" id="s2-tagline">Say it once. Orka runs it forever.</div>
-</div>
-
-<!-- SCENE 2b: Flash Ahead — "this is what you'll get" -->
-<div class="scene" id="s-flash">
-  <div class="flash-label" id="flash-label">THIS IS WHAT YOU GET</div>
-  <div class="flash-mini" id="flash-mini">
-    <div class="flash-mini-title">📋 Weekly Changelog — April 18</div>
-    <div class="flash-mini-body">
-      <span class="fm-green">✅ Shipped auth module (PR #142)</span><br>
-      <span class="fm-green">✅ Dashboard redesign — 60% done</span><br>
-      <span class="fm-green">✅ 6 planning docs written</span><br>
-      <span class="fm-red">❌ Blog post about Orka</span><br>
-      <span class="fm-gray">Reality: 68% execution rate.</span>
-    </div>
-  </div>
 </div>
 
 <!-- SCENE 3: Orka UI -->
@@ -935,40 +752,6 @@ body {
   <div class="s5-sub" id="s5-sub">Every Friday evening. Automatically. Your data never left your Mac.</div>
 </div>
 
-<!-- SCENE 5b: Runs tab flash — observability moat -->
-<div class="scene" id="s-runs">
-  <div class="runs-table-mock" id="runs-mock">
-    <div class="runs-header">
-      <div>Skill</div>
-      <div>Time</div>
-      <div>Status</div>
-      <div>Trigger</div>
-      <div>Cost</div>
-    </div>
-    <div class="runs-row">
-      <div>personal-changelog</div>
-      <div>Apr 18 · 8:00 PM</div>
-      <div><span class="runs-status-ok">✓ ok</span></div>
-      <div>scheduled</div>
-      <div class="runs-cost">$0.00</div>
-    </div>
-    <div class="runs-row">
-      <div>personal-changelog</div>
-      <div>Apr 11 · 8:00 PM</div>
-      <div><span class="runs-status-ok">✓ ok</span></div>
-      <div>scheduled</div>
-      <div class="runs-cost">$0.00</div>
-    </div>
-    <div class="runs-row">
-      <div>personal-changelog</div>
-      <div>Apr 04 · 8:00 PM</div>
-      <div><span class="runs-status-ok">✓ ok</span></div>
-      <div>scheduled</div>
-      <div class="runs-cost">$0.00</div>
-    </div>
-  </div>
-</div>
-
 <!-- SCENE 6: Destinations -->
 <div class="scene" id="s6">
   <div class="destinations-banner" id="dest-banner">
@@ -1010,12 +793,7 @@ body {
   <div class="s8-line" id="s8l2"><div class="s8-answer">Now you know.</div></div>
   <div class="s8-line" id="s8l3"><div class="s8-brand">Orka</div></div>
   <div class="s8-line" id="s8l4"><div class="s8-tagline">Your AI skills, visualized and automated — on your Mac</div></div>
-  <div class="s8-line" id="s8l5">
-    <div class="s8-urls">
-      <div class="s8-url-line">jiazhenzhu.com/lab/orka</div>
-      <div class="s8-url-line secondary">github.com/jason-jz-zhu/orka</div>
-    </div>
-  </div>
+  <div class="s8-line" id="s8l5"><div class="s8-url">orka.dev</div></div>
 </div>
 
 <script>
@@ -1030,25 +808,6 @@ function delay(ms) { return new Promise(r => setTimeout(r, ms)); }
 
 function fadeIn(el) { el && el.classList.add('visible'); }
 function fadeOut(el) { el && el.classList.remove('visible'); }
-
-// ─────────────────────────── caption controller ───────────────────
-const captionEl = () => document.getElementById('caption');
-async function showCaption(text, holdMs = 3000, fadeMs = 350) {
-  const el = captionEl();
-  el.textContent = text;
-  el.classList.add('visible');
-  await delay(holdMs);
-  el.classList.remove('visible');
-  await delay(fadeMs);
-}
-function setCaption(text) {
-  const el = captionEl();
-  el.textContent = text;
-  el.classList.add('visible');
-}
-function clearCaption() {
-  captionEl().classList.remove('visible');
-}
 
 // ─────────────────────────── typewriter ───────────────────────────
 async function typewrite(targetId, text, msPerChar) {
@@ -1143,19 +902,17 @@ async function showPopup(typeClass, typeLabel, badgeText, badgeClass, lines, hol
 async function run() {
   buildEdges();
 
-  // ── SCENE 1 (0–4s) — Hook ──
+  // ── SCENE 1 (0–4s) ──
   showScene('s1');
   await delay(600);
-  setCaption("It's Friday. Where did the week go? Nobody remembers.");
   fadeIn(document.getElementById('s1l1'));
   await delay(900);
   fadeIn(document.getElementById('s1l2'));
   await delay(1200);
   fadeIn(document.getElementById('s1l3'));
   await delay(1800);
-  clearCaption();
 
-  // ── SCENE 2 (4–9s) — Typewriter ──
+  // ── SCENE 2 (4–9s) ──
   showScene('s2');
   await delay(400);
   const twText = `Every night, scan my git commits, calendar, and notes. Tell me what I actually did.`;
@@ -1164,37 +921,19 @@ async function run() {
   document.getElementById('tw-cursor').style.display = 'none';
   await delay(500);
   fadeIn(document.getElementById('s2-tagline'));
-  setCaption("Say it once. Orka runs it forever.");
   await delay(1800);
-  clearCaption();
 
-  // ── SCENE 2b (9–13s) — FLASH AHEAD: the aha preview ──
-  showScene('s-flash');
-  setCaption("This is what you'll get.");
-  await delay(300);
-  fadeIn(document.getElementById('flash-label'));
-  await delay(400);
-  fadeIn(document.getElementById('flash-mini'));
-  await delay(2400);
-  clearCaption();
-  await delay(200);
-
-  // ── SCENE 3 (13–24s) — Studio UI + sidebar zoom + pipeline expand ──
+  // ── SCENE 3 (9–20s) ──
   showScene('s3');
   await delay(500);
 
   // 10s: ZOOM INTO SIDEBAR — fill screen with just the sidebar
   await delay(500);
   document.getElementById('canvas-transform').style.transform = 'scale(3.5) translate(340px, 50px)';
-  setCaption("Click a skill. The full pipeline unfolds on your canvas.");
-  // Show the "Pick a pipeline →" hint over the zoomed sidebar
-  await delay(400);
-  document.getElementById('sidebar-hint').classList.add('visible');
-  await delay(600);
+  await delay(800);
   const sbItem = document.getElementById('sb-changelog');
   sbItem.classList.add('active');
   await delay(1500);
-  document.getElementById('sidebar-hint').classList.remove('visible');
 
   // ZOOM BACK to full canvas before nodes appear
   document.getElementById('canvas-transform').style.transform = 'scale(1) translate(0,0)';
@@ -1220,23 +959,25 @@ async function run() {
     await delay(220);
   }
 
-  // zoom gently into pipeline, brief hold
-  await delay(300);
-  document.getElementById('canvas-transform').style.transform = 'scale(1.2) translate(-40px, 10px)';
-  await delay(1000);
-  // zoom back for execution
-  document.getElementById('canvas-transform').style.transform = 'scale(1) translate(0,0)';
-  await delay(400);
-  clearCaption();
+  // zoom gently into pipeline
+  await delay(500);
+  document.getElementById('canvas-transform').style.transform = 'scale(1.25) translate(-40px, 10px)';
 
-  // ── SCENE 4: Execution (24–38s) — still scene 3 canvas + popup overlay ──
+  // overlay text
+  await delay(1200);
+  fadeIn(document.getElementById('canvas-overlay'));
+  await delay(2200);
+  fadeOut(document.getElementById('canvas-overlay'));
+
+  // zoom back for execution
+  await delay(400);
+  document.getElementById('canvas-transform').style.transform = 'scale(1) translate(0,0)';
+
+  // ── SCENE 4: Execution (20–32s) — still scene 3 canvas + popup overlay ──
   // run button pulse
   const runBtn = document.getElementById('run-btn');
   runBtn.classList.add('running');
   runBtn.textContent = 'Running…';
-
-  // Caption during popup sequence
-  setCaption("12 commits · 14 meetings · 8 notes updated · 23 new files.");
 
   // Card 1: Git Commits
   await showPopup('input', 'INPUT · N1', '⋯ running', 'running', [
@@ -1280,9 +1021,6 @@ async function run() {
   document.getElementById('n4-badge').className = 'node-badge done';
   document.getElementById('n4-badge').textContent = '✓ done';
 
-  // Swap caption for agent reveal
-  setCaption("The AI writes your personal changelog — what you shipped, what you skipped.");
-
   // Card 5: Agent — big one
   await showPopup('agent', 'AGENT · N5', '⋯ thinking', 'thinking', [
     { html: '<div class="pl-title">🧠 Changelog Writer</div>' },
@@ -1316,29 +1054,18 @@ async function run() {
 
   runBtn.classList.remove('running');
   runBtn.textContent = 'Run All';
-  clearCaption();
 
   await delay(600);
 
-  // ── SCENE 5 (38–45s) — Notes result ──
+  // ── SCENE 5 (32–37s) ──
   showScene('s5');
-  setCaption("Friday evening. Apple Notes has your week. Data never left your Mac.");
   await delay(300);
   fadeIn(document.getElementById('notes-mock'));
   await delay(2000);
   fadeIn(document.getElementById('s5-sub'));
   await delay(2800);
-  clearCaption();
 
-  // ── SCENE 5b (45–48s) — Runs tab (observability moat) ──
-  showScene('s-runs');
-  setCaption("Every run logged. $0.00 cost. Runs on your Claude subscription.");
-  await delay(300);
-  fadeIn(document.getElementById('runs-mock'));
-  await delay(2500);
-  clearCaption();
-
-  // ── SCENE 6 (48–50s) — Destinations ──
+  // ── SCENE 6 (37–39s) ──
   showScene('s6');
   await delay(300);
   fadeIn(document.getElementById('dest-banner'));
@@ -1346,38 +1073,29 @@ async function run() {
   fadeIn(document.getElementById('dest-sub'));
   await delay(1600);
 
-  // ── SCENE 7 (50–56s) — Use cases ──
+  // ── SCENE 7 (39–44s) ──
   showScene('s7');
-  setCaption("Any workflow. Any app on your Mac. Your data stays yours.");
   await delay(300);
   for (let i = 1; i <= 4; i++) {
     fadeIn(document.getElementById('uc' + i));
-    await delay(700);
+    await delay(900);
   }
   fadeIn(document.getElementById('s7-footer'));
   await delay(1400);
-  clearCaption();
 
-  // ── SCENE 8 (56–67s) — End card with CTA URLs (extended hold) ──
+  // ── SCENE 8 (44–48s) ──
   showScene('s8');
-  setCaption("Where did the week go? Now you know. Orka.");
   await delay(400);
   const s8lines = ['s8l1','s8l2','s8l3','s8l4','s8l5'];
   for (const id of s8lines) {
     fadeIn(document.getElementById(id));
-    await delay(600);
+    await delay(700);
   }
-  // Hold the end card for breathing room (4+ seconds)
-  await delay(4500);
-  clearCaption();
-  await delay(1000);
+  // hold end card
 }
 
-// kick off — wait a bit so the browser has time to paint black background
-// before we start the timeline (prevents a white flash at video start)
-window.addEventListener('load', () => {
-  setTimeout(() => run(), 400);
-});
+// kick off
+window.addEventListener('load', () => run());
 </script>
 </body>
 </html>

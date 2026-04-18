@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { useSkills, initSkillsWatcher, type SkillMeta } from "../lib/skills";
 import { useGraph, type OrkaNode } from "../lib/graph-store";
 import { invokeCmd } from "../lib/tauri";
+import { confirmDialog } from "../lib/dialogs";
 import type { Edge } from "@xyflow/react";
 
 export default function SkillPalette() {
@@ -20,6 +21,18 @@ export default function SkillPalette() {
     if (!s.has_graph) {
       addSkillRefNode(s.slug);
       return;
+    }
+
+    // Composite skill expansion replaces the entire canvas. If there are any
+    // unsaved nodes, require explicit confirmation so a misclick doesn't
+    // destroy work.
+    const existing = useGraph.getState().nodes;
+    if (existing.length > 0) {
+      const ok = await confirmDialog(
+        `Loading "${s.slug}" will replace your current canvas (${existing.length} node${existing.length === 1 ? "" : "s"}). Continue?`,
+        { title: "Replace canvas?" }
+      );
+      if (!ok) return;
     }
 
     // Composite skill — load graph and expand onto canvas

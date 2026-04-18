@@ -1,7 +1,31 @@
 import type { Edge } from "@xyflow/react";
 import { invokeCmd, listenEvent } from "../lib/tauri";
-import { useGraph, type OrkaNode } from "./graph-store";
+import { useGraph, type OrkaNode, computeAllowedTools } from "./graph-store";
 import { buildContext, composePrompt } from "./context";
+
+/** Max concurrent chat/agent subprocesses per level. Prevents `Promise.all`
+ *  from spawning 20 `claude` processes at once on wide fan-outs. */
+const MAX_PARALLEL_AGENTS = 4;
+
+/** Simple concurrency limiter. Runs up to `limit` tasks in parallel; queues
+ *  the rest. Preserves result order matching input order. */
+async function runLimited<T>(
+  items: Array<() => Promise<T>>,
+  limit: number
+): Promise<T[]> {
+  const results = new Array<T>(items.length);
+  let cursor = 0;
+  async function worker() {
+    while (true) {
+      const i = cursor++;
+      if (i >= items.length) return;
+      results[i] = await items[i]();
+    }
+  }
+  const workers = Array.from({ length: Math.min(limit, items.length) }, worker);
+  await Promise.all(workers);
+  return results;
+}
 
 /**
  * Kahn's topological sort. Returns node ids in upstream-first order.
@@ -10,25 +34,27 @@ import { buildContext, composePrompt } from "./context";
 function topoOrder(nodes: OrkaNode[], edges: Edge[]): string[] {
   const indeg = new Map<string, number>();
   const byId = new Map(nodes.map((n) => [n.id, n]));
+  const adj = new Map<string, string[]>();
   const out: string[] = [];
-  for (const n of nodes) indeg.set(n.id, 0);
+  for (const n of nodes) { indeg.set(n.id, 0); adj.set(n.id, []); }
   for (const e of edges) {
     indeg.set(e.target, (indeg.get(e.target) ?? 0) + 1);
+    adj.get(e.source)?.push(e.target);
   }
   const queue: string[] = [];
   for (const [id, d] of indeg) if (d === 0) queue.push(id);
   while (queue.length) {
     const id = queue.shift()!;
     out.push(id);
-    for (const e of edges) {
-      if (e.source !== id) continue;
-      const d = (indeg.get(e.target) ?? 0) - 1;
-      indeg.set(e.target, d);
-      if (d === 0) queue.push(e.target);
+    for (const target of adj.get(id) ?? []) {
+      const d = (indeg.get(target) ?? 0) - 1;
+      indeg.set(target, d);
+      if (d === 0) queue.push(target);
     }
   }
   // Append any unvisited (cycles) so we don't silently drop them.
-  for (const n of nodes) if (!out.includes(n.id)) out.push(n.id);
+  const seen = new Set(out);
+  for (const n of nodes) if (!seen.has(n.id)) out.push(n.id);
   return out.filter((id) => byId.has(id));
 }
 
@@ -481,6 +507,9 @@ async function resolveTargetPath(data: {
 async function runPipelineRefNode(
   id: string
 ): Promise<{ ok: true } | { ok: false; error: string }> {
+  // Per-invocation run id so two concurrent Run All calls on the same
+  // parent node don't collide on sub-node event names.
+  const runTag = Math.random().toString(36).slice(2, 10);
   const store = useGraph.getState();
   const node = store.nodes.find((n) => n.id === id);
   if (!node || node.type !== "pipeline_ref")
@@ -573,7 +602,6 @@ async function runPipelineRefNode(
     }
 
     for (const lvl of sublevels) {
-      // Run chat/agent in parallel within a level.
       const tasks: Promise<void>[] = [];
       for (const nid of lvl) {
         const sub = subNodes.find((x) => x.id === nid);
@@ -590,46 +618,7 @@ async function runPipelineRefNode(
           ? `Context from upstream nodes:\n\n${ctx}\n\n---\n\nTask:\n${promptResolved}`
           : promptResolved;
         const cmd = sub.type === "agent" ? "run_agent_node" : "run_node";
-        const childId = `${id}__sub__${nid}`;
-        tasks.push(
-          (async () => {
-            const donePromise = waitForDone(childId);
-            await invokeCmd(cmd, {
-              id: childId,
-              prompt: composed,
-              resumeId: null,
-              addDirs: [],
-            });
-            await donePromise;
-            // Pull the output the parent node accumulated via stream events.
-            // Sub-runs aren't UI-bound, so we fall back to listening for the
-            // full text via the graph store's update path. Simplest: query
-            // node state we never created — we can't. Instead we capture
-            // text from the stream events directly.
-            // For now, leave subOutputs blank — the actual output will come
-            // from the standalone listener below.
-          })()
-        );
-      }
-      // We need a separate listener loop to actually capture text. Replace
-      // the above tasks with stream-aware execution:
-      tasks.length = 0;
-      for (const nid of lvl) {
-        const sub = subNodes.find((x) => x.id === nid);
-        if (!sub) continue;
-        if (sub.type !== "chat" && sub.type !== "agent") continue;
-        const promptRaw = String(sub.data.prompt ?? "");
-        if (!promptRaw.trim()) {
-          subOutputs.set(nid, "");
-          continue;
-        }
-        const promptResolved = substitutePlaceholders(promptRaw, bindings);
-        const ctx = buildContextText(nid);
-        const composed = ctx
-          ? `Context from upstream nodes:\n\n${ctx}\n\n---\n\nTask:\n${promptResolved}`
-          : promptResolved;
-        const cmd = sub.type === "agent" ? "run_agent_node" : "run_node";
-        const childId = `${id}__sub__${nid}`;
+        const childId = `${id}__sub__${runTag}__${nid}`;
         tasks.push(
           (async () => {
             let buf = "";
@@ -659,6 +648,7 @@ async function runPipelineRefNode(
                 prompt: composed,
                 resumeId: null,
                 addDirs: [],
+                allowedTools: computeAllowedTools(sub.data as { toolMode?: import("./graph-store").ToolMode; customTools?: string }),
               });
               await donePromise;
             } finally {
@@ -743,19 +733,28 @@ async function runSkillRefNode(
       `node:${id}:stream`,
       (text) => { buf += text; }
     );
+    const unlistenDoneRef: { fn: (() => void) | null } = { fn: null };
     const done = new Promise<void>((resolve) => {
-      listenEvent<string>(`node:${id}:done`, () => resolve()).then(() => {});
+      listenEvent<string>(`node:${id}:done`, () => resolve()).then((fn) => {
+        unlistenDoneRef.fn = fn;
+      });
     });
     try {
+      // skill_ref runs always go through agent mode with the node's own
+      // toolMode preference (default full access preserves legacy behavior).
       await invokeCmd("run_agent_node", {
         id,
         prompt,
         resumeId: null,
         addDirs: ctx.addDirs,
+        allowedTools: computeAllowedTools(
+          node.data as { toolMode?: import("./graph-store").ToolMode; customTools?: string }
+        ),
       });
       await done;
     } finally {
       unlisten();
+      unlistenDoneRef.fn?.();
     }
     store.updateNodeData(id, { running: false, output: buf, lastError: undefined });
     return { ok: true };
@@ -799,6 +798,7 @@ async function runChatAgentNode(
       prompt: composed,
       resumeId: data.resumeSessionId ?? null,
       addDirs: ctx.addDirs,
+      allowedTools: computeAllowedTools(data as { toolMode?: import("./graph-store").ToolMode; customTools?: string }),
     });
     const done = await donePromise;
     if (done.ok) return { kind: "ran", id };
@@ -810,12 +810,10 @@ async function runChatAgentNode(
   }
 }
 
-let _runStartedAt: string | null = null;
-
 export async function runAll(
   onProgress?: (p: RunAllProgress) => void
 ): Promise<RunAllResult> {
-  _runStartedAt = new Date().toISOString();
+  const runStartedAt = new Date().toISOString();
   const store = useGraph.getState();
   const ran: string[] = [];
   const skipped: string[] = [];
@@ -915,8 +913,9 @@ export async function runAll(
             ? `${chatAgentIds[0]}`
             : `${labelList} (parallel ×${chatAgentIds.length})`,
       });
-      const results = await Promise.all(
-        chatAgentIds.map((id) => runChatAgentNode(id))
+      const results = await runLimited(
+        chatAgentIds.map((id) => () => runChatAgentNode(id)),
+        MAX_PARALLEL_AGENTS
       );
       for (const r of results) {
         if (r.kind === "ran") ran.push(r.id);
@@ -969,11 +968,9 @@ export async function runAll(
       id: `run-${Date.now()}`,
       skill: pipelineName,
       inputs: [],
-      started_at: _runStartedAt ?? endedAt,
+      started_at: runStartedAt,
       ended_at: endedAt,
-      duration_ms: _runStartedAt
-        ? new Date(endedAt).getTime() - new Date(_runStartedAt).getTime()
-        : undefined,
+      duration_ms: new Date(endedAt).getTime() - new Date(runStartedAt).getTime(),
       status: failed.length > 0 ? "error" : "ok",
       trigger: "manual",
       error_message: failed.length > 0

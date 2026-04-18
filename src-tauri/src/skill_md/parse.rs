@@ -115,7 +115,18 @@ pub fn parse_skill_md_str(content: &str) -> Result<ParsedSkill, String> {
 }
 
 fn split_frontmatter(content: &str) -> Result<(String, String), String> {
-    let trimmed = content.trim_start();
+    // Normalize CRLF to LF so Windows-saved SKILL.md files parse correctly.
+    // Matters because the delimiter scan below uses "\n---".
+    let normalized: String;
+    let trimmed = {
+        let t = content.trim_start();
+        if t.contains('\r') {
+            normalized = t.replace("\r\n", "\n").replace('\r', "\n");
+            normalized.as_str()
+        } else {
+            t
+        }
+    };
     if !trimmed.starts_with("---") {
         return Err("SKILL.md must start with --- frontmatter".into());
     }
@@ -471,6 +482,22 @@ fn strip_graph_block(body: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn split_frontmatter_handles_crlf() {
+        // Windows/editor-emitted SKILL.md using CRLF line endings must still parse.
+        let content = "---\r\nname: demo\r\ndescription: crlf test\r\n---\r\n\r\n# Body\r\n";
+        let (fm, body) = split_frontmatter(content).expect("should parse");
+        assert!(fm.contains("name: demo"));
+        assert!(fm.contains("description: crlf test"));
+        assert!(body.contains("# Body"));
+    }
+
+    #[test]
+    fn split_frontmatter_requires_closing_delimiter() {
+        let content = "---\nname: x\n\nno closing delimiter";
+        assert!(split_frontmatter(content).is_err());
+    }
 
     const ATOMIC_SKILL: &str = r#"---
 name: summarize-folder

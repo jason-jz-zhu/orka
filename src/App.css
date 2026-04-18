@@ -1963,6 +1963,52 @@ html, body, #root { margin: 0; height: 100%; }
   resize: vertical;
 }
 
+/* Tool-scope selector + warning badge (Agent nodes only) */
+.chat-node__tools-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  margin: 6px 0 4px 0;
+}
+.chat-node__tool-badge {
+  font-size: 11px;
+  padding: 2px 8px;
+  border-radius: 10px;
+  font-weight: 600;
+  letter-spacing: 0.2px;
+}
+.chat-node__tool-badge--warn {
+  background: #5a3315;
+  color: #ffc78a;
+  border: 1px solid #a3571a;
+}
+.chat-node__tool-badge--ok {
+  background: #1b3a3d;
+  color: #8eddda;
+  border: 1px solid #2d6a6e;
+}
+.chat-node__tool-select {
+  background: #0f1115;
+  color: #e6e6e6;
+  border: 1px solid #2b3038;
+  border-radius: 6px;
+  padding: 3px 6px;
+  font-size: 11px;
+  cursor: pointer;
+}
+.chat-node__tool-custom {
+  flex: 1;
+  min-width: 140px;
+  background: #0f1115;
+  color: #e6e6e6;
+  border: 1px solid #2b3038;
+  border-radius: 6px;
+  padding: 3px 8px;
+  font-size: 11px;
+  font-family: ui-monospace, SFMono-Regular, monospace;
+}
+
 .chat-node__run {
   margin-top: 6px;
   background: #2a6df4;

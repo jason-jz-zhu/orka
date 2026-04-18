@@ -10,6 +10,53 @@ import {
   type OnConnect,
 } from "@xyflow/react";
 
+/** Permission scope for Agent-mode runs.
+ *
+ *   full      = --dangerously-skip-permissions (current default, unrestricted tool access)
+ *   readonly  = --allowed-tools Read,Glob,Grep,WebFetch,WebSearch
+ *   safe      = readonly + TodoWrite,NotebookEdit (no filesystem mutation, no bash)
+ *   custom    = user-supplied comma-separated list in customTools
+ *
+ * Chat mode never uses tools regardless of this setting.
+ */
+export type ToolMode = "full" | "readonly" | "safe" | "custom";
+
+const TOOL_MODE_PRESETS: Record<Exclude<ToolMode, "full" | "custom">, string[]> = {
+  readonly: ["Read", "Glob", "Grep", "WebFetch", "WebSearch"],
+  safe: ["Read", "Glob", "Grep", "WebFetch", "WebSearch", "TodoWrite", "NotebookEdit"],
+};
+
+/** Resolve a node's (toolMode, customTools) into the Vec<String> payload for
+ *  the Rust `run_agent_node` / `run_node` commands. Returns `null` when the
+ *  backend should fall back to `--dangerously-skip-permissions` (full access). */
+export function computeAllowedTools(data: {
+  toolMode?: ToolMode;
+  customTools?: string;
+}): string[] | null {
+  const mode = data.toolMode ?? "full";
+  if (mode === "full") return null;
+  if (mode === "custom") {
+    const list = (data.customTools ?? "")
+      .split(",")
+      .map((s) => s.trim())
+      .filter(Boolean);
+    return list;
+  }
+  return TOOL_MODE_PRESETS[mode];
+}
+
+export function toolModeLabel(mode: ToolMode | undefined): string {
+  switch (mode) {
+    case "readonly": return "🔒 Read-only";
+    case "safe": return "🛡 Safe";
+    case "custom": return "⚙ Custom";
+    case "full":
+    case undefined:
+    default:
+      return "⚠ Full access";
+  }
+}
+
 export type ChatNodeData = {
   prompt: string;
   output: string;
@@ -21,6 +68,10 @@ export type ChatNodeData = {
    * stripped on template save. */
   lastSessionId?: string;
   toolCount?: number;
+  /** Agent-mode permission scope. Omitted = "full" (preserves prior behavior). */
+  toolMode?: ToolMode;
+  /** Comma-separated tool whitelist when `toolMode === "custom"`. */
+  customTools?: string;
 };
 
 export type InputSource = "folder" | "url" | "clipboard" | "text";
@@ -147,6 +198,13 @@ type GraphState = {
   }) => string;
   addEdge: (source: string, target: string) => void;
   updateNodeData: (id: string, patch: Record<string, unknown>) => void;
+  /** Atomic read-modify-write of a node's data. Use this instead of reading
+   *  state then calling updateNodeData when two rapid updates could race
+   *  (e.g., stream-chunk handlers for chat/agent output). */
+  updateNodeDataWith: (
+    id: string,
+    patcher: (data: Record<string, unknown>) => Record<string, unknown>
+  ) => void;
   setGraph: (nodes: OrkaNode[], edges: Edge[]) => void;
   setActivePipelineName: (name: string | null) => void;
   setPipelineMeta: (m: PipelineMeta) => void;
@@ -170,8 +228,21 @@ function persistActivePipeline(name: string | null) {
   } catch {}
 }
 
-let seq = 0;
-const nextId = () => `n${++seq}`;
+/** Compute the next safe node id by scanning all existing ids. Prevents
+ *  collisions after `setGraph` loads a pipeline with high-numbered ids, or
+ *  when a user imports a template whose ids overlap the current canvas. */
+function nextId(): string {
+  const nodes = useGraph.getState().nodes;
+  let max = 0;
+  for (const n of nodes) {
+    const m = /^n(\d+)$/.exec(n.id);
+    if (m) {
+      const v = parseInt(m[1], 10);
+      if (v > max) max = v;
+    }
+  }
+  return `n${max + 1}`;
+}
 
 /** Place new nodes near the center of existing nodes, with slight random offset
  *  so they don't stack on top of each other. */
@@ -312,6 +383,20 @@ export const useGraph = create<GraphState>((set, get) => ({
           : n
       ),
     }),
+  updateNodeDataWith: (id, patcher) =>
+    set((s) => ({
+      nodes: s.nodes.map((n) =>
+        n.id === id
+          ? ({
+              ...n,
+              data: {
+                ...n.data,
+                ...patcher(n.data as Record<string, unknown>),
+              },
+            } as OrkaNode)
+          : n
+      ),
+    })),
   addEdge: (source, target) => {
     const id = `e-${source}-${target}`;
     if (get().edges.some((e) => e.id === id)) return;
@@ -319,7 +404,7 @@ export const useGraph = create<GraphState>((set, get) => ({
   },
   removeSessionNodeBySessionId: (sessionId) => {
     const kept = get().nodes.filter(
-      (n) => !(n.type === "session" && (n.data as any).sessionId === sessionId)
+      (n) => !(n.type === "session" && (n.data as SessionNodeData).sessionId === sessionId)
     );
     const removedIds = new Set(
       get()
@@ -341,10 +426,7 @@ export const useGraph = create<GraphState>((set, get) => ({
         typeof n.position.x === "number" &&
         typeof n.position.y === "number"
     );
-    for (const n of valid) {
-      const m = /^n(\d+)$/.exec(n.id);
-      if (m) seq = Math.max(seq, parseInt(m[1], 10));
-    }
+    // nextId() reads current store state on demand, so no seq to maintain here.
     set({ nodes: valid, edges });
   },
 }));

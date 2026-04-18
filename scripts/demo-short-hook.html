@@ -1,0 +1,43 @@
+<!DOCTYPE html>
+<html>
+<head>
+<style>
+*, *::before, *::after { margin: 0; padding: 0; box-sizing: border-box; }
+html, body { width: 1440px; height: 900px; background: #000; overflow: hidden; font-family: -apple-system, system-ui, sans-serif; }
+body { display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 20px; position: relative; }
+
+.line {
+  opacity: 0;
+  transform: translateY(14px);
+  transition: opacity 0.6s ease, transform 0.6s ease;
+  text-align: center;
+  font-weight: 800;
+  letter-spacing: -0.5px;
+}
+.line.visible { opacity: 1; transform: translateY(0); }
+
+.line-1 { font-size: 60px; color: #fff; }
+.line-2 { font-size: 60px; color: #3b82f6; text-shadow: 0 0 32px rgba(59,130,246,0.4); }
+.sub { font-size: 18px; font-weight: 400; color: #6b7a90; letter-spacing: 0.5px; margin-top: 16px; }
+</style>
+</head>
+<body>
+  <div class="line line-1" id="l1">Your AI wins shouldn't die</div>
+  <div class="line line-1" id="l2">in a terminal tab.</div>
+  <div class="line line-2" id="l3" style="margin-top: 24px;">Keep them. Run them. Forever.</div>
+  <div class="line sub" id="l4">A macOS app for Claude Code skills</div>
+
+<script>
+async function run() {
+  function fadeIn(id) { document.getElementById(id).classList.add('visible'); }
+  function wait(ms) { return new Promise(r => setTimeout(r, ms)); }
+  await wait(300);
+  fadeIn('l1'); await wait(700);
+  fadeIn('l2'); await wait(900);
+  fadeIn('l3'); await wait(800);
+  fadeIn('l4');
+}
+window.addEventListener('load', run);
+</script>
+</body>
+</html>

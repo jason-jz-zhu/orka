@@ -1,11 +1,43 @@
 use serde::Serialize;
 use std::path::PathBuf;
-use std::sync::{LazyLock, Mutex};
+use std::sync::{LazyLock, Mutex, MutexGuard};
+use std::time::SystemTime;
 
 const DEFAULT_NAME: &str = "default-workspace";
 
-static ACTIVE: LazyLock<Mutex<String>> =
-    LazyLock::new(|| Mutex::new(load_active().unwrap_or_else(|| DEFAULT_NAME.to_string())));
+/// (active_name, last-observed-mtime-of-.active). `None` mtime = file didn't exist
+/// when last observed.
+static ACTIVE: LazyLock<Mutex<(String, Option<SystemTime>)>> =
+    LazyLock::new(|| {
+        let name = load_active().unwrap_or_else(|| DEFAULT_NAME.to_string());
+        let mtime = active_mtime();
+        Mutex::new((name, mtime))
+    });
+
+fn active_lock() -> MutexGuard<'static, (String, Option<SystemTime>)> {
+    ACTIVE.lock().unwrap_or_else(|e| e.into_inner())
+}
+
+fn active_mtime() -> Option<SystemTime> {
+    std::fs::metadata(active_pointer_file())
+        .and_then(|m| m.modified())
+        .ok()
+}
+
+/// Get the current active workspace name, refreshing from `.active` on disk
+/// if the pointer file has changed since last observed. This lets GUI and
+/// `orka-cli` share state without process restart.
+fn current_active_name() -> String {
+    let current_mtime = active_mtime();
+    let mut guard = active_lock();
+    if current_mtime != guard.1 {
+        if let Some(fresh) = load_active() {
+            guard.0 = fresh;
+        }
+        guard.1 = current_mtime;
+    }
+    guard.0.clone()
+}
 
 fn root_dir() -> PathBuf {
     if let Ok(p) = std::env::var("ORKA_WORKSPACE_DIR") {
@@ -42,8 +74,7 @@ pub fn workspace_root() -> PathBuf {
     if let Ok(p) = std::env::var("ORKA_WORKSPACE_DIR") {
         return PathBuf::from(p);
     }
-    let name = ACTIVE.lock().unwrap().clone();
-    root_dir().join(&name)
+    root_dir().join(current_active_name())
 }
 
 pub fn node_dir(id: &str) -> PathBuf {
@@ -127,7 +158,7 @@ pub struct WorkspaceInfo {
 }
 
 pub fn active_name() -> String {
-    ACTIVE.lock().unwrap().clone()
+    current_active_name()
 }
 
 pub fn list_workspaces() -> Vec<WorkspaceInfo> {
@@ -200,8 +231,10 @@ pub fn switch_workspace(name: &str) -> Result<(), String> {
     if !path.exists() {
         std::fs::create_dir_all(&path).map_err(|e| e.to_string())?;
     }
-    *ACTIVE.lock().unwrap() = name.to_string();
     save_active(name);
+    let mut guard = active_lock();
+    guard.0 = name.to_string();
+    guard.1 = active_mtime();
     Ok(())
 }
 
@@ -215,10 +248,11 @@ pub fn rename_workspace(from: &str, to: &str) -> Result<(), String> {
         return Err(format!("workspace '{to}' already exists"));
     }
     std::fs::rename(&src, &dst).map_err(|e| e.to_string())?;
-    let mut active = ACTIVE.lock().unwrap();
-    if *active == from {
-        *active = to.to_string();
+    let mut active = active_lock();
+    if active.0 == from {
         save_active(to);
+        active.0 = to.to_string();
+        active.1 = active_mtime();
     }
     Ok(())
 }
@@ -243,10 +277,11 @@ pub fn delete_workspace(name: &str) -> Result<(), String> {
     if path.exists() {
         std::fs::remove_dir_all(&path).map_err(|e| e.to_string())?;
     }
-    let mut active = ACTIVE.lock().unwrap();
-    if *active == name {
-        *active = DEFAULT_NAME.to_string();
+    let mut active = active_lock();
+    if active.0 == name {
         save_active(DEFAULT_NAME);
+        active.0 = DEFAULT_NAME.to_string();
+        active.1 = active_mtime();
     }
     Ok(())
 }

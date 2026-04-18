@@ -27,6 +27,7 @@ async fn run_node(
     prompt: String,
     resume_id: Option<String>,
     add_dirs: Option<Vec<String>>,
+    allowed_tools: Option<Vec<String>>,
 ) -> Result<(), String> {
     node_runner::run_claude(
         app,
@@ -35,6 +36,7 @@ async fn run_node(
         NodeMode::Chat,
         resume_id,
         add_dirs.unwrap_or_default(),
+        node_runner::ToolScope::from_allowed(allowed_tools),
     )
     .await
 }
@@ -51,6 +53,7 @@ async fn run_agent_node(
     prompt: String,
     resume_id: Option<String>,
     add_dirs: Option<Vec<String>>,
+    allowed_tools: Option<Vec<String>>,
 ) -> Result<(), String> {
     node_runner::run_claude(
         app,
@@ -59,6 +62,7 @@ async fn run_agent_node(
         NodeMode::Agent,
         resume_id,
         add_dirs.unwrap_or_default(),
+        node_runner::ToolScope::from_allowed(allowed_tools),
     )
     .await
 }
@@ -138,6 +142,26 @@ fn onboarding_status() -> onboarding::OnboardingStatus {
     onboarding::onboarding_status()
 }
 
+/// Escape a string for safe use as a YAML scalar in frontmatter. Always
+/// emits a double-quoted form; escapes `"`, `\`, and control chars.
+fn yaml_escape_scalar(s: &str) -> String {
+    let mut out = String::with_capacity(s.len() + 2);
+    out.push('"');
+    for c in s.chars() {
+        match c {
+            '"' => out.push_str(r#"\""#),
+            '\\' => out.push_str(r"\\"),
+            '\n' => out.push_str(r"\n"),
+            '\r' => out.push_str(r"\r"),
+            '\t' => out.push_str(r"\t"),
+            c if (c as u32) < 0x20 => out.push_str(&format!("\\x{:02x}", c as u32)),
+            c => out.push(c),
+        }
+    }
+    out.push('"');
+    out
+}
+
 #[tauri::command]
 async fn generate_pipeline(
     requirement: String,
@@ -160,7 +184,8 @@ async fn write_output_file(path: String, content: String) -> Result<String, Stri
     tokio::fs::write(&p, content)
         .await
         .map_err(|e| format!("write {}: {e}", p.display()))?;
-    let abs = std::fs::canonicalize(&p)
+    let abs = tokio::fs::canonicalize(&p)
+        .await
         .unwrap_or(p)
         .to_string_lossy()
         .to_string();
@@ -179,19 +204,58 @@ async fn read_file_text(path: String) -> Result<String, String> {
 /// "Import from URL" — typically a raw GitHub gist or repo file URL.
 #[tauri::command]
 async fn fetch_text_url(url: String) -> Result<String, String> {
-    let url = url.trim();
-    if !url.starts_with("http://") && !url.starts_with("https://") {
+    const MAX_BYTES: usize = 2 * 1024 * 1024; // 2 MB
+    let url_str = url.trim();
+    if !url_str.starts_with("http://") && !url_str.starts_with("https://") {
         return Err("URL must start with http:// or https://".into());
+    }
+    // Block private-range and loopback hosts to prevent SSRF against
+    // internal services and cloud metadata endpoints.
+    let parsed = reqwest::Url::parse(url_str).map_err(|e| format!("bad url: {e}"))?;
+    if let Some(host) = parsed.host_str() {
+        let lower = host.to_ascii_lowercase();
+        let blocked_hosts = [
+            "localhost", "127.0.0.1", "::1", "0.0.0.0",
+            "169.254.169.254", "metadata.google.internal",
+        ];
+        if blocked_hosts.contains(&lower.as_str()) {
+            return Err(format!("blocked host: {host}"));
+        }
+        if let Ok(ip) = lower.parse::<std::net::IpAddr>() {
+            let is_private = match ip {
+                std::net::IpAddr::V4(v4) => {
+                    v4.is_loopback() || v4.is_private() || v4.is_link_local()
+                        || v4.is_broadcast() || v4.is_unspecified()
+                }
+                std::net::IpAddr::V6(v6) => {
+                    v6.is_loopback() || v6.is_unspecified()
+                }
+            };
+            if is_private {
+                return Err(format!("blocked private IP: {host}"));
+            }
+        }
     }
     let client = reqwest::Client::builder()
         .timeout(std::time::Duration::from_secs(30))
+        .redirect(reqwest::redirect::Policy::limited(3))
         .build()
         .map_err(|e| e.to_string())?;
-    let resp = client.get(url).send().await.map_err(|e| e.to_string())?;
+    let resp = client.get(parsed).send().await.map_err(|e| e.to_string())?;
     if !resp.status().is_success() {
-        return Err(format!("HTTP {}: {}", resp.status().as_u16(), url));
+        return Err(format!("HTTP {}: {}", resp.status().as_u16(), url_str));
     }
-    resp.text().await.map_err(|e| e.to_string())
+    // Pre-check content-length if advertised.
+    if let Some(len) = resp.content_length() {
+        if (len as usize) > MAX_BYTES {
+            return Err(format!("response too large: {len} bytes (max {MAX_BYTES})"));
+        }
+    }
+    let bytes = resp.bytes().await.map_err(|e| e.to_string())?;
+    if bytes.len() > MAX_BYTES {
+        return Err(format!("response too large: {} bytes (max {MAX_BYTES})", bytes.len()));
+    }
+    String::from_utf8(bytes.to_vec()).map_err(|e| format!("not valid utf-8: {e}"))
 }
 
 /// Default output directory for the active workspace's pipelines.
@@ -554,9 +618,11 @@ async fn export_pipeline_as_skill(
     let mut md = String::new();
     md.push_str("---\n");
     md.push_str(&format!("name: {safe}\n"));
+    // YAML-quote description to prevent injection via newlines, quotes, or
+    // a stray `---` that would close the frontmatter block.
     md.push_str(&format!(
         "description: {}\n",
-        description.replace('\n', " ").trim()
+        yaml_escape_scalar(description.replace('\n', " ").trim())
     ));
     md.push_str("---\n\n");
     md.push_str(&format!("# {name}\n\n"));
@@ -899,7 +965,11 @@ async fn save_node_as_skill(
     let mut md = String::new();
     md.push_str("---\n");
     md.push_str(&format!("name: {safe}\n"));
-    md.push_str(&format!("description: Extracted from Orka node. {}\n", prompt.lines().next().unwrap_or("").chars().take(80).collect::<String>()));
+    let desc_head = prompt.lines().next().unwrap_or("").chars().take(80).collect::<String>();
+    md.push_str(&format!(
+        "description: {}\n",
+        yaml_escape_scalar(&format!("Extracted from Orka node. {desc_head}"))
+    ));
     if !allowed.is_empty() {
         md.push_str(&format!("allowed-tools: {allowed}\n"));
     }
@@ -977,6 +1047,8 @@ pub fn run() {
             destinations::markdown_to_html,
             destinations::post_to_webhook,
             destinations::run_shell_destination,
+            destinations::approve_shell_command,
+            destinations::is_shell_command_trusted,
             dest_profiles::list_destination_profiles,
             dest_profiles::save_destination_profile,
             dest_profiles::delete_destination_profile,

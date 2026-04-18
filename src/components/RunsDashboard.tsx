@@ -6,7 +6,7 @@ export default function RunsDashboard() {
 
   useEffect(() => {
     refresh();
-  }, []);
+  }, [refresh]);
 
   return (
     <div className="runs-dash">

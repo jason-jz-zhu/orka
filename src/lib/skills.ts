@@ -43,12 +43,23 @@ export async function getSkillDetail(slug: string): Promise<SkillMeta> {
 }
 
 let _unlisten: (() => void) | null = null;
+let _initing = false;
 
 export function initSkillsWatcher() {
+  // Guard against double-init (StrictMode, remount, etc). Without this each
+  // call registered a new listener and leaked the previous one.
+  if (_unlisten || _initing) {
+    useSkills.getState().refresh();
+    return;
+  }
+  _initing = true;
   useSkills.getState().refresh();
   listenEvent("skills:changed", () => {
     useSkills.getState().refresh();
-  }).then((fn) => (_unlisten = fn));
+  }).then((fn) => {
+    _unlisten = fn;
+    _initing = false;
+  });
 }
 
 export function cleanupSkillsWatcher() {

@@ -6,7 +6,63 @@
 //!     the user can script — `shortcuts run`, `curl`, `osascript`, claude -p
 //!     with a skill, etc.)
 
+use sha2::{Digest, Sha256};
+use std::collections::HashSet;
 use std::path::PathBuf;
+
+use crate::workspace;
+
+/// Hash a shell command template for trust-store lookup. SHA-256 hex digest.
+fn hash_shell_template(template: &str) -> String {
+    let mut hasher = Sha256::new();
+    hasher.update(template.trim().as_bytes());
+    format!("{:x}", hasher.finalize())
+}
+
+fn trust_file() -> PathBuf {
+    workspace::workspace_root().join(".trusted-shell-commands.json")
+}
+
+fn load_trusted() -> HashSet<String> {
+    let path = trust_file();
+    match std::fs::read_to_string(&path) {
+        Ok(s) => serde_json::from_str::<Vec<String>>(&s)
+            .map(|v| v.into_iter().collect())
+            .unwrap_or_default(),
+        Err(_) => HashSet::new(),
+    }
+}
+
+fn save_trusted(set: &HashSet<String>) -> Result<(), String> {
+    let path = trust_file();
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
+    }
+    let list: Vec<&String> = set.iter().collect();
+    let json = serde_json::to_string_pretty(&list).map_err(|e| e.to_string())?;
+    let tmp = path.with_extension("json.tmp");
+    std::fs::write(&tmp, json).map_err(|e| e.to_string())?;
+    std::fs::rename(&tmp, &path).map_err(|e| e.to_string())
+}
+
+/// Approve a shell command template for execution. Idempotent — adding an
+/// already-trusted template is a no-op. Call this from the UI after the user
+/// explicitly confirms the command.
+#[tauri::command]
+pub fn approve_shell_command(command_template: String) -> Result<String, String> {
+    let hash = hash_shell_template(&command_template);
+    let mut set = load_trusted();
+    set.insert(hash.clone());
+    save_trusted(&set)?;
+    Ok(hash)
+}
+
+/// Check whether a shell template is currently trusted without running it.
+#[tauri::command]
+pub fn is_shell_command_trusted(command_template: String) -> Result<bool, String> {
+    let hash = hash_shell_template(&command_template);
+    Ok(load_trusted().contains(&hash))
+}
 
 /// `~/Library/Mobile Documents/com~apple~CloudDocs/Orka/` — auto-syncs to
 /// iPhone Files.app under iCloud Drive. Lazy-creates the directory.
@@ -199,6 +255,18 @@ pub async fn run_shell_destination(
     if cmd.is_empty() {
         return Err("empty shell command".into());
     }
+    // Trust gate: shell templates must be explicitly approved by the user via
+    // `approve_shell_command` before they can run. Defends against: malicious
+    // SKILL.md imports, scheduled cron on unknown templates, pasted pipelines
+    // from untrusted sources. Hash-based so editing the template revokes trust.
+    let hash = hash_shell_template(cmd);
+    if !load_trusted().contains(&hash) {
+        return Err(format!(
+            "shell command not approved (hash {}…). \
+             Approve it in the Output node settings before running.",
+            &hash[..12]
+        ));
+    }
     let mut child = tokio::process::Command::new("/bin/sh")
         .arg("-c")
         .arg(cmd)
@@ -232,4 +300,27 @@ pub async fn run_shell_destination(
     } else {
         format!("ok: {stdout}")
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn hash_is_deterministic_and_whitespace_insensitive() {
+        let a = hash_shell_template("echo hi");
+        let b = hash_shell_template("  echo hi  ");
+        let c = hash_shell_template("echo hi ");
+        assert_eq!(a, b, "leading/trailing whitespace must not change hash");
+        assert_eq!(a, c);
+    }
+
+    #[test]
+    fn hash_changes_when_template_changes() {
+        let a = hash_shell_template("echo hi");
+        let b = hash_shell_template("echo bye");
+        let c = hash_shell_template("echo 'hi'");
+        assert_ne!(a, b, "different content must produce different hash");
+        assert_ne!(a, c, "quote changes must revoke trust");
+    }
 }

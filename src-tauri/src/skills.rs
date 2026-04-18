@@ -28,6 +28,7 @@ pub struct SkillInputMeta {
 pub enum SkillSource {
     Global,
     Workspace,
+    #[allow(dead_code)] // reserved; for sibling-repo skill discovery (future)
     Sibling,
 }
 

@@ -31,9 +31,9 @@ async function main() {
   console.log(`📄 Loading ${htmlPath}`);
   await page.goto(`file://${htmlPath}`);
 
-  // Wait for the full animation to play (45s + buffer)
-  console.log("⏳ Waiting for animation to complete (48s)...");
-  await page.waitForTimeout(48000);
+  // Wait for the full animation to play
+  console.log("⏳ Waiting for animation to complete (67s)...");
+  await page.waitForTimeout(67000);
 
   // Take a final screenshot
   await page.screenshot({ path: join(OUT, "demo-final-frame.png") });

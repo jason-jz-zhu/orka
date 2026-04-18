@@ -1,13 +1,23 @@
 use serde::Serialize;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
-use std::sync::{LazyLock, Mutex};
+use std::sync::{LazyLock, Mutex, MutexGuard};
 use std::time::UNIX_EPOCH;
 use tauri::async_runtime::{self, JoinHandle};
 use tauri::{AppHandle, Emitter};
 
 static WATCHERS: LazyLock<Mutex<HashMap<String, JoinHandle<()>>>> =
     LazyLock::new(|| Mutex::new(HashMap::new()));
+
+/// Poison-recovery lock helpers: a panic in one task holding one of these
+/// mutexes otherwise bricks every subsequent Tauri command that touches them.
+fn watchers_lock() -> MutexGuard<'static, HashMap<String, JoinHandle<()>>> {
+    WATCHERS.lock().unwrap_or_else(|e| e.into_inner())
+}
+
+fn tail_cache_lock() -> MutexGuard<'static, HashMap<PathBuf, CachedTail>> {
+    TAIL_CACHE.lock().unwrap_or_else(|e| e.into_inner())
+}
 
 /// Per-file cache of the expensive I/O work a refresh would otherwise repeat:
 /// reading the whole .jsonl to compute first/last-line previews and to count
@@ -168,7 +178,7 @@ fn cached_tail(path: &Path, first_n: usize, last_n: usize) -> CachedTail {
     let cur_mtime = mtime_ms(path);
     let cur_size = file_size(path);
     {
-        let cache = TAIL_CACHE.lock().unwrap();
+        let cache = tail_cache_lock();
         if let Some(c) = cache.get(path) {
             if c.mtime_ms == cur_mtime
                 && c.size_bytes == cur_size
@@ -180,10 +190,7 @@ fn cached_tail(path: &Path, first_n: usize, last_n: usize) -> CachedTail {
         }
     }
     let fresh = scan_session_tail(path, first_n, last_n);
-    TAIL_CACHE
-        .lock()
-        .unwrap()
-        .insert(path.to_path_buf(), fresh.clone());
+    tail_cache_lock().insert(path.to_path_buf(), fresh.clone());
     fresh
 }
 
@@ -316,6 +323,7 @@ pub enum SessionStatus {
     Live,
     Done,
     Errored,
+    #[allow(dead_code)] // reserved; counted in StatusCounts for future "idle" detection
     Idle,
 }
 
@@ -594,17 +602,10 @@ pub fn list_projects() -> Vec<ProjectInfo> {
 ///   Live = claude REPL is still running (process alive, cwd matches, newest session)
 ///   Done = user exited claude (no process)
 ///   Errored = an Orka `-p` run produced is_error=true
-fn classify_status_with_live(
-    path: &Path,
-    mtime_ms: u64,
-    is_live: bool,
-) -> SessionStatus {
-    let tail = read_last_lines(path, 20);
-    classify_status_from_tail(&tail, mtime_ms, is_live)
-}
-
-/// Like `classify_status_with_live` but uses pre-read tail lines to avoid
-/// re-reading the file. Call this from the cached `list_sessions` path.
+///
+/// Takes pre-read tail lines to avoid re-reading the file — callers with cached
+/// tail (list_sessions path) and callers with freshly-read tail (debug_session)
+/// both go through this.
 fn classify_status_from_tail(
     tail: &[String],
     _mtime_ms: u64,
@@ -728,59 +729,180 @@ pub fn read_session(path: &str) -> Vec<SessionLine> {
         .collect()
 }
 
-/// Start a polling tail on `path`, emitting new lines as `session:<node_id>:append`.
-/// No-op if already watching this node_id.
+// ---- unified event-driven session tailer -------------------------------------
+//
+// One notify watcher + one consumer thread, shared across all watched sessions.
+// Per-session state (offset, event name) lives in SESSION_TAILERS. When an fs
+// event fires on a watched path, we read the byte delta since the last offset,
+// parse new JSONL lines, and emit `session:<node_id>:append`.
+//
+// Replaces the previous design of one tokio polling task per session — that
+// produced N stat syscalls every 2s with no dedup.
+
+struct SessionTailer {
+    node_id: String,
+    event_name: String,
+    offset: u64,
+    app: AppHandle,
+}
+
+static SESSION_TAILERS: LazyLock<Mutex<HashMap<PathBuf, Vec<SessionTailer>>>> =
+    LazyLock::new(|| Mutex::new(HashMap::new()));
+
+/// Holds the live notify::Watcher + event-drainer thread handle. Lazy-init'd
+/// on first watch_session call.
+struct TailerDriver {
+    watcher: notify::RecommendedWatcher,
+}
+
+static DRIVER: LazyLock<Mutex<Option<TailerDriver>>> = LazyLock::new(|| Mutex::new(None));
+
+fn tailers_lock() -> MutexGuard<'static, HashMap<PathBuf, Vec<SessionTailer>>> {
+    SESSION_TAILERS.lock().unwrap_or_else(|e| e.into_inner())
+}
+
+fn driver_lock() -> MutexGuard<'static, Option<TailerDriver>> {
+    DRIVER.lock().unwrap_or_else(|e| e.into_inner())
+}
+
+/// Read byte delta `[offset, EOF)` from `path`, parse JSONL lines, emit
+/// `session:<node_id>:append` for each active tailer on this path. Updates
+/// each tailer's offset.
+fn drain_path(path: &Path) {
+    let current_size = match std::fs::metadata(path) {
+        Ok(m) => m.len(),
+        Err(_) => return,
+    };
+    let mut tailers = tailers_lock();
+    let Some(list) = tailers.get_mut(path) else { return };
+    for t in list.iter_mut() {
+        if current_size <= t.offset { continue; }
+        let Ok(mut f) = std::fs::File::open(path) else { continue };
+        use std::io::{Read, Seek, SeekFrom};
+        if f.seek(SeekFrom::Start(t.offset)).is_err() { continue; }
+        let mut buf = String::new();
+        if f.read_to_string(&mut buf).is_err() { continue; }
+        t.offset = current_size;
+        let lines: Vec<SessionLine> = buf
+            .lines()
+            .enumerate()
+            .filter_map(|(i, raw)| parse_raw_line(raw, i))
+            .collect();
+        if !lines.is_empty() {
+            let _ = t.app.emit(&t.event_name, lines);
+        }
+    }
+}
+
+/// Start (or return existing) global notify watcher + drainer thread.
+fn ensure_driver() {
+    let mut guard = driver_lock();
+    if guard.is_some() { return; }
+
+    let (tx, rx) = std::sync::mpsc::channel::<notify::Result<notify::Event>>();
+    let watcher = match notify::recommended_watcher(move |res| {
+        let _ = tx.send(res);
+    }) {
+        Ok(w) => w,
+        Err(e) => {
+            eprintln!("session tailer watcher init failed: {e}");
+            return;
+        }
+    };
+
+    // Drainer thread: consumes events and dispatches to per-path tailers.
+    // Also coalesces: a burst of Modify events on the same path only triggers
+    // one read (we always read to EOF anyway).
+    std::thread::spawn(move || {
+        while let Ok(res) = rx.recv() {
+            let Ok(ev) = res else { continue };
+            // Brief coalesce window: absorb a few more events of the same
+            // burst before draining. Keeps emits aligned with logical writes.
+            let mut touched: std::collections::HashSet<PathBuf> =
+                ev.paths.into_iter().collect();
+            while let Ok(Ok(more)) = rx.recv_timeout(std::time::Duration::from_millis(25)) {
+                touched.extend(more.paths);
+            }
+            for p in touched {
+                drain_path(&p);
+            }
+        }
+    });
+
+    *guard = Some(TailerDriver { watcher });
+}
+
+/// Begin watching `path` for appends, emitting `session:<node_id>:append`.
+/// Event-driven (fs notify) — no polling. Idempotent per (node_id, path).
 pub fn watch_session(app: AppHandle, node_id: String, path: String) {
     {
-        let w = WATCHERS.lock().unwrap();
+        let w = watchers_lock();
         if w.contains_key(&node_id) {
             return;
         }
     }
+    watchers_lock().insert(node_id.clone(), async_runtime::spawn(async {}));
+    ensure_driver();
+
+    let pbuf = PathBuf::from(&path);
+    let offset = std::fs::metadata(&pbuf).map(|m| m.len()).unwrap_or(0);
     let event_name = format!("session:{}:append", node_id);
-    let handle = async_runtime::spawn(async move {
-        let mut offset: u64 = match tokio::fs::metadata(&path).await {
-            Ok(m) => m.len(),
-            Err(_) => 0,
-        };
-        loop {
-            tokio::time::sleep(std::time::Duration::from_millis(500)).await;
-            let current = match tokio::fs::metadata(&path).await {
-                Ok(m) => m.len(),
-                Err(_) => continue,
-            };
-            if current <= offset {
-                continue;
-            }
-            use tokio::io::{AsyncReadExt, AsyncSeekExt};
-            let mut f = match tokio::fs::File::open(&path).await {
-                Ok(f) => f,
-                Err(_) => continue,
-            };
-            if f.seek(std::io::SeekFrom::Start(offset)).await.is_err() {
-                continue;
-            }
-            let mut buf = String::new();
-            if f.read_to_string(&mut buf).await.is_err() {
-                continue;
-            }
-            offset = current;
-            let lines: Vec<SessionLine> = buf
-                .lines()
-                .enumerate()
-                .filter_map(|(i, raw)| parse_raw_line(raw, i))
-                .collect();
-            if !lines.is_empty() {
-                let _ = app.emit(&event_name, lines);
+    let tailer = SessionTailer {
+        node_id: node_id.clone(),
+        event_name,
+        offset,
+        app,
+    };
+
+    // Register tailer. If this path is new, subscribe the notify watcher to it.
+    let needs_subscribe = {
+        let mut map = tailers_lock();
+        let entry = map.entry(pbuf.clone()).or_default();
+        let is_new_path = entry.is_empty();
+        entry.push(tailer);
+        is_new_path
+    };
+    if needs_subscribe {
+        use notify::Watcher;
+        let mut drv = driver_lock();
+        if let Some(d) = drv.as_mut() {
+            if let Err(e) = d.watcher.watch(&pbuf, notify::RecursiveMode::NonRecursive) {
+                eprintln!("watch_session subscribe failed for {}: {e}", pbuf.display());
             }
         }
-    });
-    WATCHERS.lock().unwrap().insert(node_id, handle);
+    }
 }
 
 pub fn unwatch_session(node_id: &str) {
-    if let Some(h) = WATCHERS.lock().unwrap().remove(node_id) {
+    if let Some(h) = watchers_lock().remove(node_id) {
         h.abort();
+    }
+    // Remove any registry entries tied to this node_id and unwatch paths
+    // that no longer have consumers.
+    let mut now_empty: Vec<PathBuf> = Vec::new();
+    {
+        let mut map = tailers_lock();
+        let keys: Vec<PathBuf> = map.keys().cloned().collect();
+        for k in keys {
+            if let Some(list) = map.get_mut(&k) {
+                list.retain(|t| t.node_id != node_id);
+                if list.is_empty() {
+                    now_empty.push(k);
+                }
+            }
+        }
+        for k in &now_empty {
+            map.remove(k);
+        }
+    }
+    if !now_empty.is_empty() {
+        use notify::Watcher;
+        let mut drv = driver_lock();
+        if let Some(d) = drv.as_mut() {
+            for p in &now_empty {
+                let _ = d.watcher.unwatch(p);
+            }
+        }
     }
 }
 
@@ -1059,7 +1181,7 @@ pub fn debug_session(path_str: &str) -> SessionDebug {
         .unwrap_or(0);
     let last_lines = read_last_lines(path, 12);
     let awaiting = awaiting_user_input(&last_lines);
-    let status = classify_status_with_live(path, mtime, true);
+    let status = classify_status_from_tail(&last_lines, mtime, true);
     // Summarize each tail line: "type [block_types...]" / "type -"
     let summary: Vec<String> = last_lines
         .iter()

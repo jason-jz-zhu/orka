@@ -6,7 +6,13 @@ import { save as saveDialog } from "@tauri-apps/plugin-dialog";
 import { invokeCmd, listenEvent } from "../lib/tauri";
 import { parseLine } from "../lib/stream-parser";
 import { buildContext, composePrompt } from "../lib/context";
-import { useGraph, type OrkaNode } from "../lib/graph-store";
+import {
+  useGraph,
+  type OrkaNode,
+  type ToolMode,
+  computeAllowedTools,
+  toolModeLabel,
+} from "../lib/graph-store";
 import { alertDialog } from "../lib/dialogs";
 import { waitForDone } from "../lib/run-all";
 
@@ -17,6 +23,7 @@ type Props = NodeProps<Extract<OrkaNode, { type: "chat" | "agent" }>> & {
 
 export default function ChatNode({ id, data, variant = "chat" }: Props) {
   const update = useGraph((s) => s.updateNodeData);
+  const updateWith = useGraph((s) => s.updateNodeDataWith);
   const [replyText, setReplyText] = useState("");
   const [outputExpanded, setOutputExpanded] = useState(false);
 
@@ -30,13 +37,16 @@ export default function ChatNode({ id, data, variant = "chat" }: Props) {
         const events = parseLine(raw);
         for (const ev of events) {
           if (ev.kind === "text") {
-            const cur = useGraph.getState().nodes.find((n) => n.id === id);
-            const prev = (cur?.data as any)?.output ?? "";
-            update(id, { output: prev + ev.text });
+            // Atomic read-modify-write: prevents characters getting lost when
+            // two stream chunks race through the handler.
+            const text = ev.text;
+            updateWith(id, (d) => ({
+              output: String((d as { output?: string }).output ?? "") + text,
+            }));
           } else if (ev.kind === "tool_use") {
-            const cur = useGraph.getState().nodes.find((n) => n.id === id);
-            const count = ((cur?.data as any)?.toolCount ?? 0) + 1;
-            update(id, { toolCount: count });
+            updateWith(id, (d) => ({
+              toolCount: Number((d as { toolCount?: number }).toolCount ?? 0) + 1,
+            }));
           } else if (ev.kind === "tool_result") {
             // Silent — tool I/O stays out of the node output.
           } else if (ev.kind === "result") {
@@ -54,11 +64,14 @@ export default function ChatNode({ id, data, variant = "chat" }: Props) {
       const unlistenDone = await listenEvent<{ ok: boolean; error?: string }>(
         `node:${id}:done`,
         (payload) => {
-          update(id, { running: false });
           if (payload && !payload.ok && payload.error) {
-            const cur = useGraph.getState().nodes.find((n) => n.id === id);
-            const prev = (cur?.data as any)?.output ?? "";
-            update(id, { output: prev + `\n\n[error] ${payload.error}` });
+            const err = payload.error;
+            updateWith(id, (d) => ({
+              running: false,
+              output: String((d as { output?: string }).output ?? "") + `\n\n[error] ${err}`,
+            }));
+          } else {
+            update(id, { running: false });
           }
         }
       );
@@ -70,7 +83,7 @@ export default function ChatNode({ id, data, variant = "chat" }: Props) {
       cancelled = true;
       for (const fn of cleanups) fn();
     };
-  }, [id, update]);
+  }, [id, update, updateWith]);
 
   async function exportOutput() {
     if (!data.output) return;
@@ -133,6 +146,7 @@ export default function ChatNode({ id, data, variant = "chat" }: Props) {
         prompt: composed,
         resumeId: (data as any).resumeSessionId ?? null,
         addDirs: ctx.addDirs,
+        allowedTools: computeAllowedTools(data),
       });
     } catch (e) {
       update(id, {
@@ -162,6 +176,7 @@ export default function ChatNode({ id, data, variant = "chat" }: Props) {
         prompt: reply,
         resumeId: data.lastSessionId,
         addDirs: [],
+        allowedTools: computeAllowedTools(data),
       });
     } catch (e) {
       update(id, {
@@ -173,6 +188,12 @@ export default function ChatNode({ id, data, variant = "chat" }: Props) {
 
   const label = variant === "agent" ? "AGENT" : "CHAT";
   const hasError = !!data.output && /\[error\]/i.test(data.output);
+  const toolMode: ToolMode = (data as { toolMode?: ToolMode }).toolMode ?? "full";
+  const showToolMode = variant === "agent";
+  const toolBadgeClass =
+    toolMode === "full"
+      ? "chat-node__tool-badge--warn"
+      : "chat-node__tool-badge--ok";
   const stateClass = data.running
     ? "chat-node--running"
     : hasError
@@ -202,6 +223,32 @@ export default function ChatNode({ id, data, variant = "chat" }: Props) {
           <span className="chat-node__badge chat-node__badge--done">✓ done</span>
         ) : null}
       </div>
+      {showToolMode && (
+        <div className="chat-node__tools-row nodrag">
+          <span className={`chat-node__tool-badge ${toolBadgeClass}`}>
+            {toolModeLabel(toolMode)}
+          </span>
+          <select
+            className="chat-node__tool-select nodrag"
+            value={toolMode}
+            onChange={(e) => update(id, { toolMode: e.target.value as ToolMode })}
+            title="Tool permission scope"
+          >
+            <option value="full">Full access (unrestricted)</option>
+            <option value="safe">Safe (read + notebook)</option>
+            <option value="readonly">Read-only</option>
+            <option value="custom">Custom…</option>
+          </select>
+          {toolMode === "custom" && (
+            <input
+              className="chat-node__tool-custom nodrag"
+              placeholder="Read, Glob, Bash"
+              value={(data as { customTools?: string }).customTools ?? ""}
+              onChange={(e) => update(id, { customTools: e.target.value })}
+            />
+          )}
+        </div>
+      )}
       <textarea
         className="chat-node__input nodrag nowheel"
         placeholder="Prompt…"

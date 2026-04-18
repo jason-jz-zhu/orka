@@ -4,7 +4,7 @@ import { openPath, revealItemInDir } from "@tauri-apps/plugin-opener";
 import { open as openDialog } from "@tauri-apps/plugin-dialog";
 import { invokeCmd } from "../lib/tauri";
 import { useGraph, type OrkaNode } from "../lib/graph-store";
-import { alertDialog } from "../lib/dialogs";
+import { alertDialog, confirmDialog } from "../lib/dialogs";
 import {
   type DestinationProfile,
   PROFILE_KIND_LABEL,
@@ -32,6 +32,63 @@ const DEST_LABEL: Record<string, string> = {
 
 function fmtTime(ms: number): string {
   return new Date(ms).toLocaleTimeString();
+}
+
+function ShellTrustIndicator({
+  command,
+  onApproved,
+}: {
+  command: string;
+  onApproved: () => void;
+}) {
+  const [trusted, setTrusted] = useState<boolean | null>(null);
+  const trimmed = command.trim();
+
+  useEffect(() => {
+    let cancelled = false;
+    if (!trimmed) {
+      setTrusted(null);
+      return;
+    }
+    invokeCmd<boolean>("is_shell_command_trusted", { commandTemplate: trimmed })
+      .then((ok) => { if (!cancelled) setTrusted(ok); })
+      .catch(() => { if (!cancelled) setTrusted(null); });
+    return () => { cancelled = true; };
+  }, [trimmed]);
+
+  if (!trimmed) return null;
+  if (trusted === true) {
+    return <span className="output-node__trust output-node__trust--ok">✓ approved</span>;
+  }
+  return (
+    <div className="output-node__trust-row">
+      <span className="output-node__trust output-node__trust--warn">
+        ⚠ not approved — required before this node can run
+      </span>
+      <button
+        className="output-node__trust-btn nodrag"
+        onClick={async (e) => {
+          e.stopPropagation();
+          const ok = await confirmDialog(
+            `Approve this shell command to run as part of this pipeline?\n\n${trimmed}`,
+            { title: "Approve shell command?", okLabel: "Approve", cancelLabel: "Cancel" }
+          );
+          if (!ok) return;
+          try {
+            await invokeCmd<string>("approve_shell_command", {
+              commandTemplate: trimmed,
+            });
+            setTrusted(true);
+            onApproved();
+          } catch (err) {
+            await alertDialog(`Approve failed: ${err}`);
+          }
+        }}
+      >
+        Approve…
+      </button>
+    </div>
+  );
 }
 
 export default function OutputNode({ id, data }: Props) {
@@ -121,13 +178,22 @@ export default function OutputNode({ id, data }: Props) {
         );
       case "shell":
         return (
-          <textarea
-            className="output-node__input nodrag nowheel"
-            value={data.shellCommand ?? ""}
-            onChange={(e) => update(id, { shellCommand: e.target.value })}
-            placeholder={`shortcuts run "…"`}
-            rows={2}
-          />
+          <div className="output-node__shell-wrap nodrag">
+            <textarea
+              className="output-node__input nodrag nowheel"
+              value={data.shellCommand ?? ""}
+              onChange={(e) => update(id, { shellCommand: e.target.value })}
+              placeholder={`shortcuts run "…"`}
+              rows={2}
+            />
+            <ShellTrustIndicator
+              command={data.shellCommand ?? ""}
+              onApproved={() => {
+                // Force a re-render by touching the node so the badge updates.
+                update(id, { shellCommand: data.shellCommand ?? "" });
+              }}
+            />
+          </div>
         );
       case "profile":
         return (

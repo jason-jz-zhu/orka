@@ -14,7 +14,11 @@ pub async fn save(snapshot: &GraphSnapshot) -> std::io::Result<()> {
     }
     let json = serde_json::to_string_pretty(snapshot)
         .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))?;
-    tokio::fs::write(&path, json).await
+    // Atomic write: write to tmp then rename. Prevents truncated JSON on crash or
+    // concurrent writes (e.g., GUI + CLI, or rapid debounce flushes).
+    let tmp = path.with_extension("json.tmp");
+    tokio::fs::write(&tmp, json).await?;
+    tokio::fs::rename(&tmp, &path).await
 }
 
 pub async fn load() -> std::io::Result<Option<GraphSnapshot>> {
