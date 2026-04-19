@@ -3,7 +3,14 @@ import { invokeCmd, listenEvent } from "../lib/tauri";
 import { parseLine } from "../lib/stream-parser";
 import { alertDialog } from "../lib/dialogs";
 import { OutputAnnotator } from "./OutputAnnotator";
+import ScheduleModal from "./ScheduleModal";
+import { getSchedule, describeSchedule, type Schedule } from "../lib/schedules";
 import type { SkillMeta } from "../lib/skills";
+
+/** Prefix for schedules targeting an atomic skill (as opposed to a
+ *  canvas pipeline). Lets runScheduledPipeline route to the right
+ *  executor without breaking the existing pipeline-schedule path. */
+const SKILL_SCHEDULE_PREFIX = "skill:";
 
 type Props = {
   skill: SkillMeta;
@@ -44,7 +51,28 @@ export function SkillRunner({ skill }: Props) {
   const [runId, setRunId] = useState(() => freshRunId(skill.slug));
   const [state, setState] = useState<RunState>(INITIAL);
   const [reply, setReply] = useState("");
+  const [showSchedule, setShowSchedule] = useState(false);
+  const [schedule, setSchedule] = useState<Schedule | null>(null);
   const cleanupsRef = useRef<Array<() => void>>([]);
+
+  const scheduleName = `${SKILL_SCHEDULE_PREFIX}${skill.slug}`;
+
+  // Load the current schedule (if any) whenever the skill changes or
+  // after the schedule modal closes.
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        const s = await getSchedule(scheduleName);
+        if (!cancelled) setSchedule(s);
+      } catch {
+        if (!cancelled) setSchedule(null);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [scheduleName, showSchedule]);
 
   // Reset state + subscriptions when the user switches to a different skill.
   useEffect(() => {
@@ -200,6 +228,17 @@ export function SkillRunner({ skill }: Props) {
                   ? "Run again (fresh session)"
                   : "▶ Run skill"}
             </button>
+            <button
+              className="skill-runner__schedule-btn"
+              onClick={() => setShowSchedule(true)}
+              title={
+                schedule?.enabled
+                  ? `Scheduled: ${describeSchedule(schedule)}`
+                  : "Set up a repeating schedule for this skill"
+              }
+            >
+              {schedule?.enabled ? `⏰ ${describeSchedule(schedule)}` : "⏰ Schedule"}
+            </button>
             {!hasOutput && !state.running && (
               <button
                 className="skill-runner__run-btn skill-runner__run-btn--ghost"
@@ -259,6 +298,12 @@ export function SkillRunner({ skill }: Props) {
             </div>
           )}
         </>
+      )}
+      {showSchedule && (
+        <ScheduleModal
+          pipelineName={scheduleName}
+          onClose={() => setShowSchedule(false)}
+        />
       )}
     </div>
   );

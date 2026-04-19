@@ -272,32 +272,52 @@ export default function App() {
     scheduleRunningRef.current = true;
     setRunStatus(`⏰ running scheduled "${target.pipeline_name}"…`);
     try {
-      const raw = await invokeCmd<string>("load_template", {
-        name: target.pipeline_name,
-      });
-      const parsed = JSON.parse(raw);
-      if (!Array.isArray(parsed.nodes) || !Array.isArray(parsed.edges)) {
-        throw new Error("template is malformed");
-      }
-      setGraph(parsed.nodes, parsed.edges);
-      setActivePipelineName(target.pipeline_name);
-      // Let React commit + nodes register before we run.
-      await new Promise((r) => setTimeout(r, 50));
-      const result = await runAll();
-      ok = result.failed.length === 0;
-      if (!ok) {
-        error = result.failed.map((f) => `${f.id}: ${f.error}`).join("; ");
-      }
-      const out = useGraph
-        .getState()
-        .nodes.find(
-          (n) =>
-            n.type === "output" &&
-            (n.data as { lastWrittenPath?: string }).lastWrittenPath
-        );
-      if (out) {
-        outputPath =
-          (out.data as { lastWrittenPath?: string }).lastWrittenPath ?? null;
+      // Two execution paths depending on what the schedule targets:
+      //
+      //   "skill:<slug>" → atomic skill, run directly via claude -p
+      //   "<name>"       → legacy canvas pipeline, load template and runAll
+      //
+      // The prefix keeps backward compat with existing pipeline schedules
+      // while letting the Skills-tab scheduler land without touching the
+      // canvas path.
+      if (target.pipeline_name.startsWith("skill:")) {
+        const slug = target.pipeline_name.slice("skill:".length);
+        const runId = `scheduled-${slug}-${Date.now().toString(36)}`;
+        await invokeCmd("run_agent_node", {
+          id: runId,
+          prompt: `/${slug}`,
+          resumeId: null,
+          addDirs: [],
+          allowedTools: null,
+        });
+        ok = true;
+      } else {
+        const raw = await invokeCmd<string>("load_template", {
+          name: target.pipeline_name,
+        });
+        const parsed = JSON.parse(raw);
+        if (!Array.isArray(parsed.nodes) || !Array.isArray(parsed.edges)) {
+          throw new Error("template is malformed");
+        }
+        setGraph(parsed.nodes, parsed.edges);
+        setActivePipelineName(target.pipeline_name);
+        await new Promise((r) => setTimeout(r, 50));
+        const result = await runAll();
+        ok = result.failed.length === 0;
+        if (!ok) {
+          error = result.failed.map((f) => `${f.id}: ${f.error}`).join("; ");
+        }
+        const out = useGraph
+          .getState()
+          .nodes.find(
+            (n) =>
+              n.type === "output" &&
+              (n.data as { lastWrittenPath?: string }).lastWrittenPath
+          );
+        if (out) {
+          outputPath =
+            (out.data as { lastWrittenPath?: string }).lastWrittenPath ?? null;
+        }
       }
     } catch (e) {
       ok = false;

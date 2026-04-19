@@ -3469,6 +3469,22 @@ h5.block-card__heading, h6.block-card__heading { font-size: 11px; color: #8a92a0
   opacity: 0.5;
   cursor: not-allowed;
 }
+.skill-runner__schedule-btn {
+  background: transparent;
+  color: #a8b0bf;
+  border: 1px solid #2b3038;
+  padding: 8px 14px;
+  border-radius: 6px;
+  cursor: pointer;
+  font-size: 12px;
+  font-weight: 500;
+  transition: background 0.12s ease, color 0.12s ease, border-color 0.12s ease;
+}
+.skill-runner__schedule-btn:hover {
+  background: rgba(251, 191, 36, 0.1);
+  color: #fbbf24;
+  border-color: rgba(251, 191, 36, 0.4);
+}
 .skill-runner__cost,
 .skill-runner__tools {
   font-size: 11px;
