@@ -122,20 +122,25 @@ export function SessionBriefCard({
         }
         setState({ kind: "generating" });
         jobHandleRef.current = scheduleBriefJob(async () => {
+          console.log(`[session-brief] auto-gen starting: ${sessionId}`);
           try {
             const brief = await invokeCmd<SessionBrief>("generate_session_brief", {
               sessionId,
               sessionPath,
             });
-            if (mountedRef.current && !cancelled)
-              setState({ kind: "ready", brief });
-          } catch (e) {
-            // Auto-gen failures fall back to idle (offer manual retry)
-            // rather than showing a loud error — a missing `claude` CLI
-            // or auth issue shouldn't plaster every card with red text.
             if (mountedRef.current && !cancelled) {
-              console.warn(`[session-brief] auto-gen failed for ${sessionId}:`, e);
-              setState({ kind: "idle" });
+              console.log(`[session-brief] auto-gen OK: ${sessionId}`);
+              setState({ kind: "ready", brief });
+            }
+          } catch (e) {
+            // Surface the error: previously we silently fell back to
+            // idle which made "why didn't it auto-brief?" impossible
+            // to debug. Shows a compact retry with the real error on
+            // hover; user can still click Brief me to retry.
+            if (mountedRef.current && !cancelled) {
+              const msg = String(e);
+              console.warn(`[session-brief] auto-gen failed for ${sessionId}:`, msg);
+              setState({ kind: "error", message: msg });
             }
           }
         });

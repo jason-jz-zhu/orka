@@ -123,6 +123,7 @@ pub async fn generate_session_brief(
     session_id: String,
     session_path: String,
 ) -> Result<SessionBrief, String> {
+    eprintln!("[brief] generating for {session_id}");
     let path = Path::new(&session_path);
     let current_mtime = mtime_ms(path);
     if current_mtime == 0 {
@@ -133,10 +134,17 @@ pub async fn generate_session_brief(
     if transcript.trim().is_empty() {
         return Err("session transcript is empty".into());
     }
+    eprintln!("[brief] transcript: {} chars", transcript.len());
 
     let prompt = build_brief_prompt(&transcript);
+    eprintln!("[brief] prompt: {} chars, calling claude -p", prompt.len());
     let raw = call_claude_print(&prompt).await?;
-    let parsed = parse_brief_json(&raw)?;
+    eprintln!("[brief] claude returned {} chars", raw.len());
+    let parsed = parse_brief_json(&raw).map_err(|e| {
+        eprintln!("[brief] parse failed: {e}\n--raw--\n{raw}\n--end--");
+        e
+    })?;
+    eprintln!("[brief] parsed OK: youWere={:?}", parsed.you_were);
 
     let brief = SessionBrief {
         session_id: session_id.clone(),
