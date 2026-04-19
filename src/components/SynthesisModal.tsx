@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { invokeCmd } from "../lib/tauri";
@@ -7,6 +7,7 @@ import type { SessionInfo } from "../lib/session-types";
 interface SynthResult {
   answer: string;
   sourcesUsed: number;
+  sessionId: string | null;
 }
 
 type Props = {
@@ -14,46 +15,67 @@ type Props = {
   onClose: () => void;
 };
 
-type State =
-  | { kind: "ready" }
-  | { kind: "asking" }
-  | { kind: "answered"; result: SynthResult }
-  | { kind: "error"; message: string };
+type Turn = { role: "user" | "assistant"; text: string };
 
 /**
- * "Ask across these sessions" modal. User has multi-selected N sessions
- * in the SessionDashboard; this opens with those sessions listed as
- * sources and a single input for the question. Hitting Ask sends the
- * merged context to the backend synthesizer.
- *
- * This is NOT a magic "merge three session brains into one"; under the
- * hood it's a one-shot claude -p with N source-tagged transcripts
- * prepended. We say so honestly in the UX (the sources panel shows
- * what's being read), so the user knows it's prompt engineering not
- * persistent state mutation.
+ * Cross-session synthesis — thread mode. First question seeds a new
+ * Claude session with the selected sources baked into the prompt;
+ * subsequent questions --resume that session, so the conversation
+ * continues with full context. Model: Claude default (Sonnet) — the
+ * sources benefit from good reasoning.
  */
 export function SynthesisModal({ sources, onClose }: Props) {
-  const [question, setQuestion] = useState("");
-  const [state, setState] = useState<State>({ kind: "ready" });
+  const [thread, setThread] = useState<Turn[]>([]);
+  const [draft, setDraft] = useState("");
+  const [sending, setSending] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [sessionId, setSessionId] = useState<string | null>(null);
+  const [sourcesUsed, setSourcesUsed] = useState<number | null>(null);
+  const scrollRef = useRef<HTMLDivElement | null>(null);
 
-  async function ask() {
-    if (!question.trim() || state.kind === "asking") return;
-    setState({ kind: "asking" });
+  // Keep the thread scrolled to the bottom as answers land.
+  useEffect(() => {
+    const el = scrollRef.current;
+    if (el) el.scrollTop = el.scrollHeight;
+  }, [thread, sending]);
+
+  async function send() {
+    const question = draft.trim();
+    if (!question || sending) return;
+    setError(null);
+    setThread((t) => [...t, { role: "user", text: question }]);
+    setDraft("");
+    setSending(true);
     try {
       const payload = sources.map((s) => ({
         sessionId: s.id,
         sessionPath: s.path,
         label: projectLabel(s),
       }));
-      const result = await invokeCmd<SynthResult>("synthesize_sessions", {
-        question,
-        sources: payload,
-      });
-      setState({ kind: "answered", result });
+      const result: SynthResult = sessionId
+        ? await invokeCmd("continue_synthesis", { sessionId, question })
+        : await invokeCmd("synthesize_sessions", {
+            question,
+            sources: payload,
+          });
+      setThread((t) => [...t, { role: "assistant", text: result.answer }]);
+      if (result.sessionId) setSessionId(result.sessionId);
+      if (sourcesUsed == null && result.sourcesUsed > 0) {
+        setSourcesUsed(result.sourcesUsed);
+      }
     } catch (e) {
-      setState({ kind: "error", message: String(e) });
+      const msg = String(e);
+      setError(msg);
+      setThread((t) => [
+        ...t,
+        { role: "assistant", text: `✗ ${msg}` },
+      ]);
+    } finally {
+      setSending(false);
     }
   }
+
+  const isEmpty = thread.length === 0 && !sending;
 
   return (
     <div className="modal-overlay" onClick={onClose}>
@@ -65,7 +87,15 @@ export function SynthesisModal({ sources, onClose }: Props) {
           <div>
             <div className="modal-title">📚 Ask across sessions</div>
             <div className="modal-subtitle">
-              {sources.length} source{sources.length === 1 ? "" : "s"} selected
+              {sources.length} source{sources.length === 1 ? "" : "s"} ·
+              {" "}
+              {sessionId ? (
+                <span title={`Synthesis session: ${sessionId}`}>
+                  thread active (Sonnet)
+                </span>
+              ) : (
+                <span>Sonnet</span>
+              )}
             </div>
           </div>
           <button className="modal-close" onClick={onClose}>
@@ -87,46 +117,68 @@ export function SynthesisModal({ sources, onClose }: Props) {
           ))}
         </div>
 
+        <div className="synth-modal__thread" ref={scrollRef}>
+          {isEmpty && (
+            <div className="synth-modal__empty">
+              Ask anything across these {sources.length} sessions. Replies
+              continue in the same thread.
+            </div>
+          )}
+          {thread.map((turn, i) => (
+            <div
+              key={i}
+              className={`synth-modal__turn synth-modal__turn--${turn.role}`}
+            >
+              <div className="synth-modal__turn-label">
+                {turn.role === "user" ? "👤 you" : "🤖 claude"}
+              </div>
+              <div className="synth-modal__turn-body">
+                <ReactMarkdown remarkPlugins={[remarkGfm]}>
+                  {turn.text}
+                </ReactMarkdown>
+              </div>
+            </div>
+          ))}
+          {sending && (
+            <div className="synth-modal__turn synth-modal__turn--assistant">
+              <div className="synth-modal__turn-label">🤖 claude</div>
+              <div className="synth-modal__turn-body synth-modal__pending">
+                ⏳ Thinking…
+              </div>
+            </div>
+          )}
+        </div>
+
         <div className="synth-modal__input-row">
           <textarea
             className="synth-modal__input"
-            placeholder="What do you want to know across these sessions?"
-            value={question}
-            onChange={(e) => setQuestion(e.target.value)}
+            placeholder={
+              thread.length === 0
+                ? "What do you want to know across these sessions?"
+                : "Keep asking…"
+            }
+            value={draft}
+            onChange={(e) => setDraft(e.target.value)}
             onKeyDown={(e) => {
               if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) {
                 e.preventDefault();
-                void ask();
+                void send();
               }
             }}
-            rows={3}
-            disabled={state.kind === "asking"}
+            rows={2}
+            disabled={sending}
           />
           <button
             className="modal-btn modal-btn--primary synth-modal__ask-btn"
-            onClick={() => void ask()}
-            disabled={!question.trim() || state.kind === "asking"}
+            onClick={() => void send()}
+            disabled={!draft.trim() || sending}
           >
-            {state.kind === "asking" ? "⏳ Thinking…" : "Ask"}
+            {sending ? "⏳" : thread.length === 0 ? "Ask" : "Send"}
           </button>
         </div>
 
-        {state.kind === "error" && (
-          <div className="synth-modal__error">✗ {state.message}</div>
-        )}
-
-        {state.kind === "answered" && (
-          <div className="synth-modal__answer">
-            <div className="synth-modal__answer-meta">
-              Based on {state.result.sourcesUsed} source
-              {state.result.sourcesUsed === 1 ? "" : "s"}
-            </div>
-            <div className="synth-modal__answer-body">
-              <ReactMarkdown remarkPlugins={[remarkGfm]}>
-                {state.result.answer}
-              </ReactMarkdown>
-            </div>
-          </div>
+        {error && !sending && (
+          <div className="synth-modal__error">✗ {error}</div>
         )}
       </div>
     </div>

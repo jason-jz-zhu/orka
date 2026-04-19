@@ -30,6 +30,11 @@ pub struct SynthResult {
     /// files or unreadable ones are silently skipped).
     #[serde(rename = "sourcesUsed")]
     pub sources_used: u32,
+    /// Claude session id from the stream. Capture once; the frontend
+    /// passes it back on subsequent questions so the conversation
+    /// continues in the same session (Claude sees full history).
+    #[serde(rename = "sessionId")]
+    pub session_id: Option<String>,
 }
 
 /// Ask a question across multiple sessions' transcripts.
@@ -101,10 +106,35 @@ QUESTION: {question}",
         if used == 1 { "" } else { "s" }
     );
 
-    let answer = call_claude_print(&prompt).await?;
+    // The first turn seeds a real session (no --no-session-persistence)
+    // so subsequent follow-up questions can --resume and keep context.
+    // This means a synthesis conversation appears in ~/.claude/projects/
+    // as a normal session, which the user can also revisit in the
+    // Sessions tab later — feature, not bug.
+    let (answer, session_id) = call_claude_print_json(&prompt, None).await?;
     Ok(SynthResult {
         answer: answer.trim().to_string(),
         sources_used: used,
+        session_id,
+    })
+}
+
+/// Continue a synthesis conversation. Subsequent turns just carry the
+/// user's new question — Claude already has the source transcripts
+/// from turn 1 in its session history.
+#[tauri::command]
+pub async fn continue_synthesis(
+    session_id: String,
+    question: String,
+) -> Result<SynthResult, String> {
+    if question.trim().is_empty() {
+        return Err("question is empty".into());
+    }
+    let (answer, new_sid) = call_claude_print_json(&question, Some(&session_id)).await?;
+    Ok(SynthResult {
+        answer: answer.trim().to_string(),
+        sources_used: 0, // sources were baked into the first turn
+        session_id: new_sid.or(Some(session_id)),
     })
 }
 
@@ -189,11 +219,21 @@ fn extract_text(v: &serde_json::Value) -> String {
     String::new()
 }
 
-async fn call_claude_print(prompt: &str) -> Result<String, String> {
-    let output = tokio::process::Command::new("claude")
-        .arg("-p")
-        .arg("--no-session-persistence")
-        .arg(prompt)
+/// Run claude -p with JSON output format so we can extract both the
+/// result text AND the session id for later --resume calls. If
+/// `resume_id` is provided, we chain onto that session; otherwise
+/// a new one is created.
+async fn call_claude_print_json(
+    prompt: &str,
+    resume_id: Option<&str>,
+) -> Result<(String, Option<String>), String> {
+    let mut cmd = tokio::process::Command::new("claude");
+    cmd.arg("-p").arg("--output-format").arg("json");
+    if let Some(sid) = resume_id {
+        cmd.arg("--resume").arg(sid).arg("--fork-session");
+    }
+    cmd.arg(prompt);
+    let output = cmd
         .output()
         .await
         .map_err(|e| format!("spawn claude: {e}"))?;
@@ -205,5 +245,21 @@ async fn call_claude_print(prompt: &str) -> Result<String, String> {
             err.trim()
         ));
     }
-    Ok(String::from_utf8_lossy(&output.stdout).to_string())
+    let raw = String::from_utf8_lossy(&output.stdout).to_string();
+    // claude -p --output-format json returns {result, session_id, cost_usd, ...}
+    let v: serde_json::Value =
+        serde_json::from_str(raw.trim()).map_err(|e| format!("parse claude json: {e}"))?;
+    let result = v
+        .get("result")
+        .and_then(|r| r.as_str())
+        .unwrap_or("")
+        .to_string();
+    let sid = v
+        .get("session_id")
+        .and_then(|s| s.as_str())
+        .map(|s| s.to_string());
+    if result.is_empty() {
+        return Err(format!("claude returned no result text; raw: {raw}"));
+    }
+    Ok((result, sid))
 }

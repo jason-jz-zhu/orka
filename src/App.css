@@ -1614,30 +1614,63 @@ html, body, #root { margin: 0; height: 100%; }
   color: #fca5a5;
   font-size: 12px;
 }
-.synth-modal__answer {
-  padding: 14px 20px 20px;
+/* Thread layout — first Q&A seeds the synthesis session, follow-ups
+   --resume it so conversation continues with full context. */
+.synth-modal__thread {
+  flex: 1;
   overflow-y: auto;
+  padding: 14px 20px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  max-height: 50vh;
+  min-height: 140px;
 }
-.synth-modal__answer-meta {
-  font-size: 10px;
+.synth-modal__empty {
   color: #64748b;
-  text-transform: uppercase;
-  letter-spacing: 0.6px;
-  margin-bottom: 8px;
+  font-size: 12px;
+  text-align: center;
+  padding: 16px 0;
 }
-.synth-modal__answer-body {
+.synth-modal__turn {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.synth-modal__turn-label {
+  font-size: 10px;
+  color: #94a3b8;
+  letter-spacing: 0.3px;
+}
+.synth-modal__turn-body {
+  padding: 8px 10px;
+  border-radius: 6px;
   font-size: 13px;
+  line-height: 1.55;
   color: #e6e6e6;
-  line-height: 1.6;
 }
-.synth-modal__answer-body p { margin: 0 0 8px; }
-.synth-modal__answer-body pre {
+.synth-modal__turn--user .synth-modal__turn-body {
+  background: rgba(59, 130, 246, 0.12);
+  border-left: 2px solid #3b82f6;
+}
+.synth-modal__turn--assistant .synth-modal__turn-body {
+  background: rgba(168, 176, 191, 0.08);
+  border-left: 2px solid #94a3b8;
+}
+.synth-modal__turn-body p { margin: 0 0 6px; }
+.synth-modal__turn-body p:last-child { margin-bottom: 0; }
+.synth-modal__turn-body pre {
   background: #0a0d12;
   border: 1px solid #22262e;
   border-radius: 4px;
   padding: 8px 10px;
+  margin: 4px 0;
   overflow-x: auto;
   font-size: 11px;
+}
+.synth-modal__pending {
+  color: #8a92a0;
+  font-style: italic;
 }
 
 .dashboard__toast {
