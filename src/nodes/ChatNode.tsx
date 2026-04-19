@@ -301,6 +301,7 @@ export default function ChatNode({ id, data, variant = "chat" }: Props) {
             markdown={data.output}
             runId={id}
             sourceTitle={`${variant} ${id}`}
+            sessionId={data.lastSessionId}
           />
           {data.output.length > 200 && (
             <button

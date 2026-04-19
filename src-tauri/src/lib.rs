@@ -1052,6 +1052,7 @@ pub fn run() {
             destinations::is_shell_command_trusted,
             annotations::load_annotations,
             annotations::save_annotation,
+            annotations::append_message,
             annotations::delete_annotation,
             dest_profiles::list_destination_profiles,
             dest_profiles::save_destination_profile,

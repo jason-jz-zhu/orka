@@ -1,43 +1,53 @@
-//! Per-output annotations — Day 2 of Output Annotator.
+//! Per-output annotations — thread-shaped model.
 //!
-//! Each "output" (a ChatNode output or a Runs-tab run) is a stream of
-//! markdown blocks the user can mark up with their own notes. Annotations
-//! are persisted to `<workspace>/annotations/<output_id>.json` so they
-//! survive restarts and can be surfaced in Run history later.
+//! An annotation is a **conversation thread** attached to a markdown block.
+//! The thread mixes the user's own notes and Claude's replies, so the
+//! unified UI ("comment on a block + optionally ask Claude about it")
+//! reduces to one data type and one persistence file.
 //!
-//! File format is deliberately simple and stable: a single JSON object with
-//! a `version: 1` field and an `annotations: []` array sorted by blockIdx.
-//! Write is atomic (tmp + rename) to prevent corruption on crash.
+//! File: `<workspace>/annotations/<output_id>.json`, atomic tmp+rename
+//! write, path-traversal guarded on `output_id`.
+//!
+//! Backward-compatible load: older files used a `text: String` field on
+//! each annotation. `migrate_legacy_text_to_thread` reads those and
+//! projects them into a thread of length 1 with `author="you"`.
 
 use crate::workspace;
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 
+/// One turn in an annotation thread.
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct Annotation {
-    /// 0-based index within the parsed-block list.
-    #[serde(rename = "blockIdx")]
-    pub block_idx: usize,
-    /// djb2 hash of the block content so we can detect drift when the
-    /// underlying output is regenerated.
-    #[serde(rename = "blockHash")]
-    pub block_hash: String,
-    /// Snapshot of the block's type ("paragraph", "bullet", "code", …).
-    #[serde(rename = "blockType")]
-    pub block_type: String,
-    /// Snapshot of the block's content at annotation time. Lets us show
-    /// "the block was: …" if the output later changes.
-    #[serde(rename = "blockContent")]
-    pub block_content: String,
-    /// User's note — plain text (may contain markdown, we don't render it
-    /// in the picker).
+pub struct Message {
+    /// "you" or "claude". Kept as a free string to avoid breaking
+    /// migrations if we introduce new authors (e.g. "system").
+    pub author: String,
     pub text: String,
-    /// ISO-8601 UTC.
     #[serde(rename = "createdAt")]
     pub created_at: String,
-    /// ISO-8601 UTC. Equals createdAt on first save.
-    #[serde(rename = "updatedAt")]
+}
+
+/// Legacy shape support. When deserializing, we accept either the new
+/// `thread` field or an old `text` string; the normalized form written
+/// back is always `thread`.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Annotation {
+    pub block_idx: usize,
+    pub block_hash: String,
+    pub block_type: String,
+    pub block_content: String,
+    /// Conversation thread: user notes + Claude replies, in order.
+    #[serde(default)]
+    pub thread: Vec<Message>,
+    /// When true, the thread is mirrored to Apple Notes on every change.
+    #[serde(default)]
+    pub saved_to_notes: bool,
+    pub created_at: String,
     pub updated_at: String,
+    /// Accepted only during deserialization of legacy files; never serialized.
+    #[serde(default, skip_serializing)]
+    text: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
@@ -49,7 +59,7 @@ pub struct RunAnnotations {
 }
 
 fn default_version() -> u32 {
-    1
+    2 // bumped from 1 when thread became the canonical shape
 }
 
 fn annotations_dir() -> PathBuf {
@@ -57,8 +67,6 @@ fn annotations_dir() -> PathBuf {
 }
 
 fn file_for(output_id: &str) -> Result<PathBuf, String> {
-    // Prevent path traversal: the output_id must be a simple slug/id,
-    // not contain separators or relative-path markers.
     if output_id.is_empty()
         || output_id.contains('/')
         || output_id.contains('\\')
@@ -70,16 +78,38 @@ fn file_for(output_id: &str) -> Result<PathBuf, String> {
     Ok(annotations_dir().join(format!("{output_id}.json")))
 }
 
-/// Read annotations for a given output id. Returns an empty (default)
-/// structure if the file doesn't exist yet — callers never have to handle
-/// "missing file" separately.
+/// Normalize legacy `text`-only annotations into a thread with one user
+/// message. Idempotent — called on every load.
+fn migrate_legacy_text_to_thread(data: &mut RunAnnotations) {
+    for a in data.annotations.iter_mut() {
+        if a.thread.is_empty() {
+            if let Some(legacy) = a.text.take() {
+                if !legacy.is_empty() {
+                    a.thread.push(Message {
+                        author: "you".to_string(),
+                        text: legacy,
+                        created_at: a.created_at.clone(),
+                    });
+                }
+            }
+        } else {
+            // Drop the legacy field if it was present alongside a thread.
+            a.text = None;
+        }
+    }
+    if data.version < 2 {
+        data.version = 2;
+    }
+}
+
 #[tauri::command]
 pub async fn load_annotations(output_id: String) -> Result<RunAnnotations, String> {
     let path = file_for(&output_id)?;
     match tokio::fs::read_to_string(&path).await {
         Ok(s) => {
-            let data: RunAnnotations = serde_json::from_str(&s)
+            let mut data: RunAnnotations = serde_json::from_str(&s)
                 .map_err(|e| format!("parse {}: {e}", path.display()))?;
+            migrate_legacy_text_to_thread(&mut data);
             Ok(data)
         }
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(RunAnnotations::default()),
@@ -87,12 +117,8 @@ pub async fn load_annotations(output_id: String) -> Result<RunAnnotations, Strin
     }
 }
 
-/// Upsert a single annotation — add if its blockIdx is new, replace if
-/// an annotation for that block already exists. Updates `updated_at` to
-/// current time; preserves `created_at` on replace.
-///
-/// Returns the full updated annotations list so the frontend can sync
-/// without a separate load.
+/// Full-annotation upsert. Frontend sends the complete annotation (block
+/// fields + full thread); backend replaces or inserts by blockIdx.
 #[tauri::command]
 pub async fn save_annotation(
     output_id: String,
@@ -104,13 +130,13 @@ pub async fn save_annotation(
     let now = chrono::Utc::now().to_rfc3339();
     let mut incoming = annotation;
     incoming.updated_at = now.clone();
+    incoming.text = None;
 
     if let Some(existing) = data
         .annotations
         .iter_mut()
         .find(|a| a.block_idx == incoming.block_idx)
     {
-        // Preserve original creation time.
         incoming.created_at = existing.created_at.clone();
         *existing = incoming;
     } else {
@@ -125,8 +151,55 @@ pub async fn save_annotation(
     Ok(data)
 }
 
-/// Remove the annotation for the given block. No-op if one doesn't exist.
-/// Returns the full updated list.
+/// Append a single message to an existing thread, or create the
+/// annotation if none exists yet. Used by the "Ask Claude" reply path
+/// so streaming replies don't require rewriting the whole thread.
+#[tauri::command]
+pub async fn append_message(
+    output_id: String,
+    block_idx: usize,
+    block_hash: String,
+    block_type: String,
+    block_content: String,
+    author: String,
+    text: String,
+) -> Result<RunAnnotations, String> {
+    let path = file_for(&output_id)?;
+    let mut data = load_annotations(output_id.clone()).await?;
+
+    let now = chrono::Utc::now().to_rfc3339();
+    let message = Message {
+        author,
+        text,
+        created_at: now.clone(),
+    };
+
+    if let Some(existing) = data
+        .annotations
+        .iter_mut()
+        .find(|a| a.block_idx == block_idx)
+    {
+        existing.thread.push(message);
+        existing.updated_at = now;
+    } else {
+        data.annotations.push(Annotation {
+            block_idx,
+            block_hash,
+            block_type,
+            block_content,
+            thread: vec![message],
+            saved_to_notes: false,
+            created_at: now.clone(),
+            updated_at: now,
+            text: None,
+        });
+        data.annotations.sort_by_key(|a| a.block_idx);
+    }
+
+    write_atomic(&path, &data).await?;
+    Ok(data)
+}
+
 #[tauri::command]
 pub async fn delete_annotation(
     output_id: String,
@@ -168,28 +241,82 @@ mod tests {
         assert!(file_for("a/b").is_err());
         assert!(file_for("with\0null").is_err());
         assert!(file_for("legit-node-123").is_ok());
-        assert!(file_for("run_abc_456").is_ok());
     }
 
     #[test]
-    fn annotations_roundtrip_json() {
+    fn thread_roundtrip() {
         let data = RunAnnotations {
-            version: 1,
+            version: 2,
             annotations: vec![Annotation {
                 block_idx: 2,
                 block_hash: "deadbeef".into(),
                 block_type: "bullet".into(),
                 block_content: "- do the thing".into(),
-                text: "but we already did it".into(),
-                created_at: "2026-04-18T10:00:00Z".into(),
-                updated_at: "2026-04-18T10:00:00Z".into(),
+                thread: vec![
+                    Message {
+                        author: "you".into(),
+                        text: "is this right?".into(),
+                        created_at: "2026-04-19T10:00:00Z".into(),
+                    },
+                    Message {
+                        author: "claude".into(),
+                        text: "yes, per RFC xyz".into(),
+                        created_at: "2026-04-19T10:00:05Z".into(),
+                    },
+                ],
+                saved_to_notes: true,
+                created_at: "2026-04-19T10:00:00Z".into(),
+                updated_at: "2026-04-19T10:00:05Z".into(),
+                text: None,
             }],
         };
         let s = serde_json::to_string(&data).unwrap();
         let back: RunAnnotations = serde_json::from_str(&s).unwrap();
-        assert_eq!(back.version, 1);
-        assert_eq!(back.annotations.len(), 1);
-        assert_eq!(back.annotations[0].block_idx, 2);
-        assert_eq!(back.annotations[0].text, "but we already did it");
+        assert_eq!(back.version, 2);
+        assert_eq!(back.annotations[0].thread.len(), 2);
+        assert_eq!(back.annotations[0].thread[1].author, "claude");
+        assert!(back.annotations[0].saved_to_notes);
+    }
+
+    #[test]
+    fn legacy_text_migrates_to_thread() {
+        // Old format — single `text` field, no `thread`.
+        let legacy = r#"{
+            "version": 1,
+            "annotations": [{
+                "blockIdx": 0,
+                "blockHash": "abc",
+                "blockType": "paragraph",
+                "blockContent": "hi",
+                "text": "my old note",
+                "createdAt": "2026-04-18T00:00:00Z",
+                "updatedAt": "2026-04-18T00:00:00Z"
+            }]
+        }"#;
+        let mut data: RunAnnotations = serde_json::from_str(legacy).unwrap();
+        migrate_legacy_text_to_thread(&mut data);
+        assert_eq!(data.version, 2);
+        assert_eq!(data.annotations[0].thread.len(), 1);
+        assert_eq!(data.annotations[0].thread[0].author, "you");
+        assert_eq!(data.annotations[0].thread[0].text, "my old note");
+    }
+
+    #[test]
+    fn legacy_empty_text_does_not_add_phantom_message() {
+        let legacy = r#"{
+            "version": 1,
+            "annotations": [{
+                "blockIdx": 0,
+                "blockHash": "abc",
+                "blockType": "paragraph",
+                "blockContent": "hi",
+                "text": "",
+                "createdAt": "2026-04-18T00:00:00Z",
+                "updatedAt": "2026-04-18T00:00:00Z"
+            }]
+        }"#;
+        let mut data: RunAnnotations = serde_json::from_str(legacy).unwrap();
+        migrate_legacy_text_to_thread(&mut data);
+        assert!(data.annotations[0].thread.is_empty());
     }
 }

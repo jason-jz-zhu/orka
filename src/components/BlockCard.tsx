@@ -1,97 +1,104 @@
-import { useEffect, useRef, useState, memo } from "react";
+import { useEffect, useMemo, useRef, useState, memo } from "react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import type { Block } from "../lib/markdown-blocks";
+import type { Annotation, ThreadMessage } from "../lib/annotations";
 
 type Props = {
   block: Block;
-  /** The saved annotation text for this block, if any. */
-  annotationText?: string;
-  /** True when this block's editor is currently open. */
+  /** Saved annotation (thread + metadata) for this block, if any. */
+  annotation?: Annotation;
+  /** True when this block's thread card is currently open. */
   active?: boolean;
-  /** Called when the user clicks 💬 to open the editor. */
+
+  /** Toggle the thread card open/closed. */
   onToggle?: (block: Block) => void;
-  /** Called with the new text when the user presses save (⌘+Enter or blur). */
-  onSave?: (block: Block, text: string) => void;
-  /** Called when the user removes the annotation. */
-  onDelete?: (block: Block) => void;
 
   /**
-   * One-click quick save — no editor, no annotation. Primary hover action
-   * because "I want to keep this block" is by far the highest-frequency
-   * intent in daily use. Parent typically appends the raw block markdown
-   * to Apple Notes.
+   * Append a user note to the thread. No AI call. Called when the user
+   * types and presses Shift+Enter (or Cmd+S on an empty input).
    */
-  onQuickSave?: (block: Block) => Promise<void> | void;
+  onAddNote?: (block: Block, text: string) => Promise<void> | void;
+
   /**
-   * Editor-mode save that also sends block + annotation to the
-   * destination. Shown inside the open editor, never on hover.
+   * Send a message to Claude; Claude's reply will stream back into the
+   * thread via onAddClaudeMessage at the store level. Called on plain
+   * Enter with text.
    */
-  onSaveToNotes?: (block: Block, annotation: string) => Promise<void> | void;
+  onAskClaude?: (block: Block, text: string) => Promise<void> | void;
+
+  /** Toggle the "sync to Apple Notes" flag on the annotation. */
+  onToggleNotesSync?: (block: Block, next: boolean) => Promise<void> | void;
+
+  /** Delete the entire thread for this block. */
+  onDelete?: (block: Block) => Promise<void> | void;
 };
 
 /**
- * Render a single markdown block with:
- *   - type-aware visual styling (heading/code/bullet/…)
- *   - hover-revealed 💬 indicator (always visible when annotated or active)
- *   - inline editor that expands below the block when active
+ * Render a markdown block with an optional Word-style comment thread.
  *
- * Editor UX:
- *   - textarea auto-focuses on open
- *   - ⌘/Ctrl+Enter saves, Escape closes without saving
- *   - Save on blur
- *   - Delete button when there's an existing annotation
+ * Interaction model (Notion-minimal + Google-Docs hybrid):
+ *   - Block renders as normal markdown.
+ *   - Hover reveals a 💬 bubble in the top-right; a counter badge shows
+ *     when a thread already exists.
+ *   - Clicking opens a thread card in-place below the block. The card
+ *     shows all past messages (you + Claude) and a text input.
+ *   - Plain Enter sends as "Ask Claude" — the reply streams back into
+ *     the same thread.
+ *   - Shift+Enter sends as "Note only" — saved to the thread, no AI.
+ *   - Esc closes the card without sending.
+ *   - A "Sync to Notes" toggle mirrors the thread to Apple Notes.
+ *
+ * The whole surface is ONE data type (Annotation with thread) and ONE
+ * visual element (thread card). No separate "annotate" vs "continue chat"
+ * flows — it's one comment thread where Claude can be a participant.
  */
 function BlockCardImpl({
   block,
-  annotationText,
+  annotation,
   active,
   onToggle,
-  onSave,
+  onAddNote,
+  onAskClaude,
+  onToggleNotesSync,
   onDelete,
-  onQuickSave,
-  onSaveToNotes,
 }: Props) {
   const [hovered, setHovered] = useState(false);
-  const [draft, setDraft] = useState(annotationText ?? "");
-  const [quickState, setQuickState] = useState<"idle" | "saving" | "saved">("idle");
-  const [dispatching, setDispatching] = useState<null | "notes">(null);
+  const [draft, setDraft] = useState("");
+  const [sending, setSending] = useState(false);
   const textareaRef = useRef<HTMLTextAreaElement | null>(null);
 
-  const hasAnnotation = !!annotationText && annotationText.trim().length > 0;
-  const showIndicator = hovered || hasAnnotation || active;
+  const thread = annotation?.thread ?? [];
+  const hasThread = thread.length > 0;
+  const showBubble = hovered || hasThread || active;
 
-  // Keep the draft in sync when the saved value changes from outside
-  // (e.g., reload from backend, switch blocks while editor is open).
-  useEffect(() => {
-    setDraft(annotationText ?? "");
-  }, [annotationText, block.idx]);
-
-  // Auto-focus when the editor opens.
   useEffect(() => {
     if (active) {
       textareaRef.current?.focus();
-      textareaRef.current?.setSelectionRange(
-        textareaRef.current.value.length,
-        textareaRef.current.value.length,
-      );
+    } else {
+      setDraft("");
     }
   }, [active]);
 
-  const commitIfChanged = () => {
-    const next = draft.trim();
-    const prev = (annotationText ?? "").trim();
-    if (next === prev) return;
-    if (next === "") {
-      if (prev !== "") onDelete?.(block);
-    } else {
-      onSave?.(block, next);
+  async function submit(kind: "ask" | "note") {
+    const text = draft.trim();
+    if (!text || sending) return;
+    setSending(true);
+    try {
+      if (kind === "ask") {
+        await onAskClaude?.(block, text);
+      } else {
+        await onAddNote?.(block, text);
+      }
+      setDraft("");
+    } finally {
+      setSending(false);
     }
-  };
+  }
 
   const typeClass = `block-card--${block.type}`;
   const activeClass = active ? "block-card--active" : "";
-  const annotatedClass = hasAnnotation ? "block-card--annotated" : "";
+  const annotatedClass = hasThread ? "block-card--annotated" : "";
 
   return (
     <div
@@ -101,133 +108,125 @@ function BlockCardImpl({
     >
       <div className="block-card__body">{renderBlockBody(block)}</div>
 
-      {showIndicator && (
-        <div className="block-card__hover-actions">
-          {onQuickSave && !active && (
-            <button
-              type="button"
-              className={`block-card__quick-btn ${quickState === "saved" ? "block-card__quick-btn--saved" : ""}`}
-              title="Save this block to Apple Notes"
-              disabled={quickState === "saving"}
-              onClick={async (e) => {
-                e.stopPropagation();
-                if (quickState !== "idle") return;
-                setQuickState("saving");
-                try {
-                  await onQuickSave(block);
-                  setQuickState("saved");
-                  window.setTimeout(() => setQuickState("idle"), 1500);
-                } catch {
-                  setQuickState("idle");
-                }
-              }}
-            >
-              {quickState === "saving" ? "⏳" : quickState === "saved" ? "✓" : "📝"}
-            </button>
-          )}
-          <button
-            type="button"
-            className={`block-card__indicator ${hasAnnotation ? "block-card__indicator--has" : ""}`}
-            title={active ? "Close" : hasAnnotation ? "Edit note" : "Add a note"}
-            onClick={(e) => {
-              e.stopPropagation();
-              if (active) commitIfChanged();
-              onToggle?.(block);
-            }}
-          >
-            💬
-          </button>
-        </div>
+      {showBubble && (
+        <button
+          type="button"
+          className={`block-card__indicator ${hasThread ? "block-card__indicator--has" : ""}`}
+          title={
+            active
+              ? "Close"
+              : hasThread
+                ? `${thread.length} message${thread.length === 1 ? "" : "s"}`
+                : "Comment on this block"
+          }
+          onClick={(e) => {
+            e.stopPropagation();
+            onToggle?.(block);
+          }}
+        >
+          {hasThread ? `💬 ${thread.length}` : "💬"}
+        </button>
       )}
 
       {active && (
-        <div className="block-card__annot-editor nodrag nowheel" onClick={(e) => e.stopPropagation()}>
+        <div
+          className="block-card__thread nodrag nowheel"
+          onClick={(e) => e.stopPropagation()}
+        >
+          {thread.length > 0 && (
+            <div className="block-card__thread-messages">
+              {thread.map((msg, i) => (
+                <ThreadBubble key={i} msg={msg} />
+              ))}
+            </div>
+          )}
           <textarea
             ref={textareaRef}
-            className="block-card__annot-textarea"
+            className="block-card__thread-input"
             value={draft}
-            placeholder="Your note about this block… (⌘+Enter to save, Esc to close)"
+            placeholder={
+              hasThread
+                ? "Reply (Enter=ask Claude, Shift+Enter=note)"
+                : "Ask Claude about this… (Shift+Enter for a note only)"
+            }
             onChange={(e) => setDraft(e.target.value)}
-            onBlur={commitIfChanged}
             onKeyDown={(e) => {
-              if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) {
+              if (e.key === "Enter" && !e.shiftKey && !e.metaKey && !e.ctrlKey) {
                 e.preventDefault();
-                commitIfChanged();
-                onToggle?.(block);
+                void submit("ask");
+              } else if (e.key === "Enter" && e.shiftKey) {
+                e.preventDefault();
+                void submit("note");
               } else if (e.key === "Escape") {
                 e.preventDefault();
-                // Revert draft, then close.
-                setDraft(annotationText ?? "");
+                setDraft("");
                 onToggle?.(block);
               }
             }}
-            rows={3}
+            rows={2}
+            disabled={sending}
           />
-          <div className="block-card__annot-actions">
-            {hasAnnotation && (
+          <div className="block-card__thread-actions">
+            <label className="block-card__thread-toggle">
+              <input
+                type="checkbox"
+                checked={annotation?.savedToNotes ?? false}
+                onChange={(e) =>
+                  void onToggleNotesSync?.(block, e.currentTarget.checked)
+                }
+              />
+              Sync to Apple Notes
+            </label>
+            <div className="block-card__thread-spacer" />
+            {hasThread && (
               <button
                 type="button"
-                className="block-card__annot-btn block-card__annot-btn--danger"
+                className="block-card__thread-btn block-card__thread-btn--danger"
                 onClick={(e) => {
                   e.preventDefault();
-                  setDraft("");
-                  onDelete?.(block);
+                  void onDelete?.(block);
                   onToggle?.(block);
                 }}
               >
                 Delete
               </button>
             )}
-            <div className="block-card__annot-spacer" />
             <button
               type="button"
-              className="block-card__annot-btn"
-              onClick={(e) => {
-                e.preventDefault();
-                setDraft(annotationText ?? "");
-                onToggle?.(block);
-              }}
+              className="block-card__thread-btn"
+              disabled={!draft.trim() || sending}
+              title="Save as note (Shift+Enter)"
+              onClick={() => void submit("note")}
             >
-              Cancel
+              Note
             </button>
             <button
               type="button"
-              className="block-card__annot-btn block-card__annot-btn--primary"
-              disabled={draft.trim() === (annotationText ?? "").trim()}
-              onClick={(e) => {
-                e.preventDefault();
-                commitIfChanged();
-                onToggle?.(block);
-              }}
+              className="block-card__thread-btn block-card__thread-btn--primary"
+              disabled={!draft.trim() || sending}
+              title="Ask Claude (Enter)"
+              onClick={() => void submit("ask")}
             >
-              Save
+              {sending ? "⏳" : "Ask Claude"}
             </button>
           </div>
-
-          {onSaveToNotes && (
-            <div className="block-card__annot-dispatch">
-              <button
-                type="button"
-                className="block-card__dispatch-btn"
-                disabled={dispatching !== null}
-                onClick={async (e) => {
-                  e.preventDefault();
-                  commitIfChanged();
-                  setDispatching("notes");
-                  try {
-                    await onSaveToNotes(block, draft.trim());
-                  } finally {
-                    setDispatching(null);
-                  }
-                }}
-                title="Append this block and your note to Apple Notes"
-              >
-                {dispatching === "notes" ? "⏳ Saving…" : "📝 Save to Notes with note"}
-              </button>
-            </div>
-          )}
         </div>
       )}
+    </div>
+  );
+}
+
+function ThreadBubble({ msg }: { msg: ThreadMessage }) {
+  const isYou = msg.author === "you";
+  const labelClass = isYou ? "block-card__msg--you" : "block-card__msg--claude";
+  const label = isYou ? "👤 you" : "🤖 claude";
+  const bodyRendered = useMemo(() => msg.text, [msg.text]);
+  return (
+    <div className={`block-card__msg ${labelClass}`}>
+      <div className="block-card__msg-label">{label}</div>
+      <div className="block-card__msg-text">
+        <ReactMarkdown remarkPlugins={[remarkGfm]}>{bodyRendered}</ReactMarkdown>
+      </div>
     </div>
   );
 }

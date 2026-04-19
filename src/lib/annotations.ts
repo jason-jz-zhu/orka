@@ -2,27 +2,27 @@ import { create } from "zustand";
 import { invokeCmd, inTauri } from "./tauri";
 
 /**
- * Per-output annotations store — Day 2 of Output Annotator.
+ * Per-output annotations — thread-shaped.
  *
- * Design:
- *   - One zustand store, indexed by `outputId`. An outputId is the
- *     stable id of whatever owns the Claude output: a ChatNode node id
- *     for on-canvas outputs, a run id for the Runs tab, etc.
- *   - Each output holds a Map<blockIdx, Annotation>. We use a Map (not
- *     an object) because block indices change rarely but are compared
- *     numerically and we want O(1) lookup/update.
- *   - Persistence via Tauri commands (save_annotation / delete_annotation
- *     / load_annotations). Frontend state is the cache; backend JSON file
- *     is the source of truth.
- *   - Browser fallback (vite dev without Tauri): in-memory only.
+ * An annotation is a conversation thread attached to a block. The thread
+ * holds both user notes and Claude replies (from `--resume`'d follow-ups),
+ * which unifies the "comment on a block" and "continue chatting about a
+ * block" interactions into one data type and one UI surface.
  */
+
+export interface ThreadMessage {
+  author: "you" | "claude";
+  text: string;
+  createdAt: string;
+}
 
 export interface Annotation {
   blockIdx: number;
   blockHash: string;
   blockType: string;
   blockContent: string;
-  text: string;
+  thread: ThreadMessage[];
+  savedToNotes: boolean;
   createdAt: string;
   updatedAt: string;
 }
@@ -35,24 +35,48 @@ interface PersistedShape {
 interface State {
   /** outputId → (blockIdx → Annotation) */
   byOutput: Map<string, Map<number, Annotation>>;
-  /** outputIds currently being loaded (to deduplicate concurrent loads). */
   loading: Set<string>;
 
-  /** Load annotations for an output id from backend. No-op if already loaded. */
   load: (outputId: string) => Promise<void>;
-  /** Return the Annotation map for an outputId (empty Map if none). */
-  forOutput: (outputId: string) => Map<number, Annotation>;
-  /** Upsert an annotation. Writes through to backend. */
-  upsert: (outputId: string, partial: Omit<Annotation, "createdAt" | "updatedAt">) => Promise<void>;
-  /** Remove. Writes through to backend. */
+
+  /**
+   * Append a single message to a block's thread. The primary write path
+   * for both user messages and Claude replies — avoids round-tripping
+   * the whole annotation object when all we have is one more turn.
+   */
+  appendMessage: (
+    outputId: string,
+    blockInfo: {
+      blockIdx: number;
+      blockHash: string;
+      blockType: string;
+      blockContent: string;
+    },
+    message: { author: "you" | "claude"; text: string }
+  ) => Promise<void>;
+
+  /**
+   * Replace a block's annotation wholesale. Used for the rare cases
+   * where we need to rewrite a thread (e.g., editing a past message or
+   * toggling savedToNotes).
+   */
+  upsert: (outputId: string, annotation: Annotation) => Promise<void>;
+
   remove: (outputId: string, blockIdx: number) => Promise<void>;
 }
 
-/** Deep-clone the byOutput map so set() triggers consumers that compare by identity. */
+const EMPTY_ANNOTATIONS: Map<number, Annotation> = new Map();
+
 function cloneMap(src: Map<string, Map<number, Annotation>>): Map<string, Map<number, Annotation>> {
   const out = new Map<string, Map<number, Annotation>>();
   for (const [k, v] of src) out.set(k, new Map(v));
   return out;
+}
+
+function indexed(list: Annotation[]): Map<number, Annotation> {
+  const m = new Map<number, Annotation>();
+  for (const a of list) m.set(a.blockIdx, a);
+  return m;
 }
 
 export const useAnnotations = create<State>((set, get) => ({
@@ -74,38 +98,73 @@ export const useAnnotations = create<State>((set, get) => ({
         list = persisted?.annotations ?? [];
       }
       const next = cloneMap(get().byOutput);
-      const inner = new Map<number, Annotation>();
-      for (const a of list) inner.set(a.blockIdx, a);
-      next.set(outputId, inner);
+      next.set(outputId, indexed(list));
       const done = new Set(get().loading);
       done.delete(outputId);
       set({ byOutput: next, loading: done });
     } catch (e) {
-      // Loading failures are non-fatal — annotations are additive UX.
       console.warn(`[annotations] load failed for ${outputId}:`, e);
       const done = new Set(get().loading);
       done.delete(outputId);
-      // Still seed an empty map so subsequent calls don't re-fetch forever.
       const next = cloneMap(get().byOutput);
       if (!next.has(outputId)) next.set(outputId, new Map());
       set({ byOutput: next, loading: done });
     }
   },
 
-  forOutput: (outputId: string) => {
-    return get().byOutput.get(outputId) ?? new Map();
+  appendMessage: async (outputId, blockInfo, message) => {
+    // Optimistic local append so the UI shows the message immediately
+    // (especially important for Claude streaming, where we'll replace
+    // this placeholder with the real response as chunks arrive).
+    const now = new Date().toISOString();
+    const next = cloneMap(get().byOutput);
+    const inner = next.get(outputId) ?? new Map<number, Annotation>();
+    const existing = inner.get(blockInfo.blockIdx);
+    const threadTail: ThreadMessage = {
+      author: message.author,
+      text: message.text,
+      createdAt: now,
+    };
+    if (existing) {
+      inner.set(blockInfo.blockIdx, {
+        ...existing,
+        thread: [...existing.thread, threadTail],
+        updatedAt: now,
+      });
+    } else {
+      inner.set(blockInfo.blockIdx, {
+        ...blockInfo,
+        thread: [threadTail],
+        savedToNotes: false,
+        createdAt: now,
+        updatedAt: now,
+      });
+    }
+    next.set(outputId, inner);
+    set({ byOutput: next });
+
+    if (!inTauri) return;
+
+    try {
+      const persisted = await invokeCmd<PersistedShape>("append_message", {
+        outputId,
+        blockIdx: blockInfo.blockIdx,
+        blockHash: blockInfo.blockHash,
+        blockType: blockInfo.blockType,
+        blockContent: blockInfo.blockContent,
+        author: message.author,
+        text: message.text,
+      });
+      const after = cloneMap(get().byOutput);
+      after.set(outputId, indexed(persisted.annotations));
+      set({ byOutput: after });
+    } catch (e) {
+      console.warn(`[annotations] appendMessage failed for ${outputId}:`, e);
+    }
   },
 
-  upsert: async (outputId, partial) => {
-    const now = new Date().toISOString();
-    const existing = get().byOutput.get(outputId)?.get(partial.blockIdx);
-    const annotation: Annotation = {
-      ...partial,
-      createdAt: existing?.createdAt ?? now,
-      updatedAt: now,
-    };
-
-    // Optimistic local update first so UI feels instant.
+  upsert: async (outputId, annotation) => {
+    // Local-first write.
     const next = cloneMap(get().byOutput);
     const inner = next.get(outputId) ?? new Map<number, Annotation>();
     inner.set(annotation.blockIdx, annotation);
@@ -119,14 +178,11 @@ export const useAnnotations = create<State>((set, get) => ({
         outputId,
         annotation,
       });
-      // Replace with backend-authoritative list (timestamps may differ by ms).
       const after = cloneMap(get().byOutput);
-      const fresh = new Map<number, Annotation>();
-      for (const a of persisted.annotations) fresh.set(a.blockIdx, a);
-      after.set(outputId, fresh);
+      after.set(outputId, indexed(persisted.annotations));
       set({ byOutput: after });
     } catch (e) {
-      console.warn(`[annotations] save failed for ${outputId}:`, e);
+      console.warn(`[annotations] upsert failed for ${outputId}:`, e);
     }
   },
 
@@ -144,25 +200,14 @@ export const useAnnotations = create<State>((set, get) => ({
         blockIdx,
       });
       const after = cloneMap(get().byOutput);
-      const fresh = new Map<number, Annotation>();
-      for (const a of persisted.annotations) fresh.set(a.blockIdx, a);
-      after.set(outputId, fresh);
+      after.set(outputId, indexed(persisted.annotations));
       set({ byOutput: after });
     } catch (e) {
-      console.warn(`[annotations] delete failed for ${outputId}:`, e);
+      console.warn(`[annotations] remove failed for ${outputId}:`, e);
     }
   },
 }));
 
-/**
- * Stable empty fallback. Returning `new Map()` from a selector causes
- * zustand v5 to detect a "state change" every render (Object.is fails on
- * fresh instances) and recurse into infinite re-render, crashing the app.
- * Always return this singleton when the outputId has no annotations yet.
- */
-const EMPTY_ANNOTATIONS: Map<number, Annotation> = new Map();
-
-/** Hook helper: reactive Annotation map for a specific outputId. */
 export function useOutputAnnotations(outputId: string): Map<number, Annotation> {
   return useAnnotations((s) => s.byOutput.get(outputId) ?? EMPTY_ANNOTATIONS);
 }
