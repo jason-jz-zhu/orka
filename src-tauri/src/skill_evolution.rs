@@ -205,11 +205,12 @@ pub async fn apply_skill_evolution(
 // ───────── internals ──────────────────────────────────────────────────
 
 async fn call_claude_print(prompt: &str) -> Result<String, String> {
+    let model = crate::model_config::model_for_evolution();
     let output = tokio::process::Command::new("claude")
         .arg("-p")
         .arg("--no-session-persistence")
         .arg("--model")
-        .arg("haiku")
+        .arg(&model)
         .arg(prompt)
         .output()
         .await

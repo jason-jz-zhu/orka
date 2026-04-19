@@ -68,6 +68,12 @@ fn claude_args(
         "stream-json".into(),
         "--verbose".into(),
     ];
+    // User-configurable model for skill runs + continue-chats.
+    let model = crate::model_config::model_for_skill_run();
+    if !model.trim().is_empty() {
+        args.push("--model".into());
+        args.push(model);
+    }
     for d in add_dirs {
         args.push("--add-dir".into());
         args.push(d.clone());

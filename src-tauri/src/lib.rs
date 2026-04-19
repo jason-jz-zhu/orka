@@ -1,4 +1,5 @@
 mod annotations;
+mod model_config;
 mod session_brief;
 mod session_synthesis;
 mod skill_evolution;
@@ -1071,6 +1072,8 @@ pub fn run() {
             skill_evolution::apply_skill_evolution,
             session_synthesis::synthesize_sessions,
             session_synthesis::continue_synthesis,
+            model_config::get_model_config,
+            model_config::set_model_config,
             dest_profiles::list_destination_profiles,
             dest_profiles::save_destination_profile,
             dest_profiles::delete_destination_profile,

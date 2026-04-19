@@ -227,8 +227,10 @@ async fn call_claude_print_json(
     prompt: &str,
     resume_id: Option<&str>,
 ) -> Result<(String, Option<String>), String> {
+    let model = crate::model_config::model_for_synthesis();
     let mut cmd = tokio::process::Command::new("claude");
     cmd.arg("-p").arg("--output-format").arg("json");
+    cmd.arg("--model").arg(&model);
     if let Some(sid) = resume_id {
         cmd.arg("--resume").arg(sid).arg("--fork-session");
     }

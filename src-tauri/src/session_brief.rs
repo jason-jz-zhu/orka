@@ -379,21 +379,19 @@ Keep each value under 100 characters. Use second-person phrasing (\"You were deb
 }
 
 async fn call_claude_print(prompt: &str) -> Result<String, String> {
-    // Brief generation is a dead-simple JSON extraction task — Haiku
-    // handles it perfectly and is 3-5x faster than Sonnet for this
-    // kind of short structured output. The Orka sessions surface has
-    // dozens of briefs to produce; using Haiku turns 30s into 5s on
-    // large sessions.
+    // Model is user-configurable; default is haiku (fast, cheap, plenty
+    // for JSON extraction).
     //
     // `--no-session-persistence` is critical: without it, every brief
     // generation would itself be written to `~/.claude/projects/` as a
     // new session. Orka would then see those briefs as real sessions
     // and try to auto-brief THEM — infinite pollution.
+    let model = crate::model_config::model_for_brief();
     let output = tokio::process::Command::new("claude")
         .arg("-p")
         .arg("--no-session-persistence")
         .arg("--model")
-        .arg("haiku")
+        .arg(&model)
         .arg(prompt)
         .output()
         .await

@@ -22,6 +22,7 @@ import RunsDashboard from "./components/RunsDashboard";
 import SessionDashboard from "./components/SessionDashboard";
 import StatusBar from "./components/StatusBar";
 import { SkillsTab } from "./components/SkillsTab";
+import { ModelSettingsModal } from "./components/ModelSettingsModal";
 import { usePersistence } from "./lib/persistence";
 import { runAll, requestRunAllSkip } from "./lib/run-all";
 import { invokeCmd } from "./lib/tauri";
@@ -85,6 +86,7 @@ export default function App() {
   );
   const [showGenerate, setShowGenerate] = useState(false);
   const [showSettings, setShowSettings] = useState(false);
+  const [showModels, setShowModels] = useState(false);
   const [scheduleFor, setScheduleFor] = useState<string | null>(null);
   const [scheduledNames, setScheduledNames] = useState<Set<string>>(
     () => new Set()
@@ -489,6 +491,13 @@ export default function App() {
         )}
         <button
           className="toolbar__settings"
+          onClick={() => setShowModels(true)}
+          title="Claude models per feature"
+        >
+          🤖
+        </button>
+        <button
+          className="toolbar__settings"
           onClick={() => setShowSettings(true)}
           title="Settings · destinations"
         >
@@ -566,6 +575,9 @@ export default function App() {
       )}
       {showSettings && (
         <SettingsModal onClose={() => setShowSettings(false)} />
+      )}
+      {showModels && (
+        <ModelSettingsModal onClose={() => setShowModels(false)} />
       )}
     </div>
   );
