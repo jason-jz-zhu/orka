@@ -181,6 +181,19 @@ export default function SessionDashboard({
     return sessions.filter((s) => {
       if (s.status !== "live") return false;
       if (!showOrka && orkaKeys.has(s.project_key)) return false;
+      // Hide transient sessions that Orka's own claude -p calls briefly
+      // create before --no-session-persistence deletes them. Two checks:
+      //   1. 0 turns + no user preview — nothing useful to show regardless
+      //   2. first user message matches our brief-prompt signature —
+      //      catches the rare case where the file has the prompt written
+      //      before the persistence-disable cleanup fires.
+      if (s.turn_count === 0 && !s.first_user_preview) return false;
+      if (
+        s.first_user_preview &&
+        s.first_user_preview.includes("You are summarizing a Claude Code session")
+      ) {
+        return false;
+      }
       if (q) {
         const hay = `${s.project_cwd} ${s.first_user_preview ?? ""} ${
           s.last_message_preview ?? ""
