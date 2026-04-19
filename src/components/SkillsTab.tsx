@@ -1,6 +1,20 @@
 import { useEffect, useState } from "react";
 import { useSkills, initSkillsWatcher, type SkillMeta } from "../lib/skills";
 import { SkillRunner } from "./SkillRunner";
+import { TrustedTapsSection } from "./TrustedTapsSection";
+
+/** Known tap-id prefixes — these come from the trusted_taps backend and
+ *  indicate the skill was installed via a tap (gstack, etc). Slugs of
+ *  installed-tap skills follow `<tap-id>-<skill-name>`; the prefix is
+ *  stripped into a badge so the list stays readable. */
+const KNOWN_TAP_PREFIXES = ["gstack"];
+
+function extractTapPrefix(slug: string): string | null {
+  for (const p of KNOWN_TAP_PREFIXES) {
+    if (slug.startsWith(`${p}-`)) return p;
+  }
+  return null;
+}
 
 /**
  * Skills tab — the new default entry point.
@@ -67,35 +81,42 @@ export function SkillsTab() {
           </div>
         )}
         <div className="skills-tab__list">
-          {filtered.map((s) => (
-            <div
-              key={s.slug}
-              className={
-                "skills-tab__item" +
-                (s.slug === selectedSlug ? " skills-tab__item--active" : "")
-              }
-              onClick={() => setSelectedSlug(s.slug)}
-              title={s.description}
-            >
-              <span className="skills-tab__icon">
-                {s.has_graph ? "◆" : "◇"}
-              </span>
-              <div className="skills-tab__info">
-                <div className="skills-tab__slug">
-                  {s.slug}
-                  {s.has_graph && (
-                    <span className="skills-tab__composite-tag">pipeline</span>
-                  )}
+          {filtered.map((s) => {
+            const tapBadge = extractTapPrefix(s.slug);
+            return (
+              <div
+                key={s.slug}
+                className={
+                  "skills-tab__item" +
+                  (s.slug === selectedSlug ? " skills-tab__item--active" : "")
+                }
+                onClick={() => setSelectedSlug(s.slug)}
+                title={s.description}
+              >
+                <span className="skills-tab__icon">
+                  {s.has_graph ? "◆" : "◇"}
+                </span>
+                <div className="skills-tab__info">
+                  <div className="skills-tab__slug">
+                    {s.slug}
+                    {tapBadge && (
+                      <span className="skills-tab__tap-badge">{tapBadge}</span>
+                    )}
+                    {s.has_graph && (
+                      <span className="skills-tab__composite-tag">pipeline</span>
+                    )}
+                  </div>
+                  <div className="skills-tab__desc">
+                    {s.description.slice(0, 80)}
+                    {s.description.length > 80 ? "…" : ""}
+                  </div>
                 </div>
-                <div className="skills-tab__desc">
-                  {s.description.slice(0, 80)}
-                  {s.description.length > 80 ? "…" : ""}
-                </div>
+                <span className="skills-tab__source">{s.source}</span>
               </div>
-              <span className="skills-tab__source">{s.source}</span>
-            </div>
-          ))}
+            );
+          })}
         </div>
+        <TrustedTapsSection />
       </aside>
 
       <section className="skills-tab__runner">

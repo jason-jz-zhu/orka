@@ -1,5 +1,6 @@
 mod annotations;
 mod session_brief;
+mod trusted_taps;
 mod dest_profiles;
 mod destinations;
 mod graph;
@@ -1058,6 +1059,11 @@ pub fn run() {
             session_brief::get_session_brief,
             session_brief::generate_session_brief,
             session_brief::clear_session_brief,
+            trusted_taps::list_trusted_taps,
+            trusted_taps::install_tap,
+            trusted_taps::uninstall_tap,
+            trusted_taps::add_custom_tap,
+            trusted_taps::remove_custom_tap,
             dest_profiles::list_destination_profiles,
             dest_profiles::save_destination_profile,
             dest_profiles::delete_destination_profile,
