@@ -1,3 +1,4 @@
+mod annotations;
 mod dest_profiles;
 mod destinations;
 mod graph;
@@ -1049,6 +1050,9 @@ pub fn run() {
             destinations::run_shell_destination,
             destinations::approve_shell_command,
             destinations::is_shell_command_trusted,
+            annotations::load_annotations,
+            annotations::save_annotation,
+            annotations::delete_annotation,
             dest_profiles::list_destination_profiles,
             dest_profiles::save_destination_profile,
             dest_profiles::delete_destination_profile,

@@ -1,56 +1,61 @@
-import { useMemo } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { BlockCard } from "./BlockCard";
-import { parseBlocks, type Block } from "../lib/markdown-blocks";
+import { parseBlocks, blockHash, type Block } from "../lib/markdown-blocks";
+import { useAnnotations, useOutputAnnotations } from "../lib/annotations";
 
 type Props = {
   /** Full Claude output as a markdown string. */
   markdown: string;
   /**
-   * Stable id for the run that produced this output. Used as the key under
-   * which annotations are persisted. Pass a chat node id or a Runs row id.
+   * Stable id used as the annotation persistence key. Pass a chat node id
+   * for on-canvas outputs, or a run id for the Runs tab.
    */
   runId: string;
-  /**
-   * Optional: called when the user clicks the annotation indicator on a
-   * block. Parent owns the sidebar UI for now — Annotator only renders
-   * the block list and emits events.
-   */
-  onAnnotate?: (block: Block, runId: string) => void;
-  /**
-   * Optional: the block currently being annotated (highlighted while the
-   * sidebar is open for it).
-   */
-  activeBlockIdx?: number;
-  /**
-   * Optional: set of block indices that have saved annotations, so the
-   * 💬 indicator renders as filled.
-   */
-  annotatedBlockIdxs?: ReadonlySet<number>;
 };
 
 /**
- * Render a Claude output as a vertical list of annotatable BlockCards.
+ * Render a Claude output as a vertical list of annotatable BlockCards,
+ * wired to the annotations store for persistence.
  *
- * Parsing is memoized on the markdown input — re-rendering the component
- * with the same output (e.g., on hover of another part of the UI) does
- * not re-run the parser.
+ * On mount: triggers a one-shot load from `~/<workspace>/annotations/<runId>.json`
+ * (no-op if already loaded). On annotation save/delete: optimistic local
+ * update + Tauri write-through.
  *
- * This component is intentionally stateless about annotations themselves;
- * the parent (typically a chat node or Runs detail view) owns annotation
- * state and the sidebar UI. This keeps the Annotator reusable in any
- * context where Claude output is rendered.
+ * Only one editor is open at a time — clicking a different 💬 closes the
+ * current editor (blur commits pending changes first).
  */
-export function OutputAnnotator({
-  markdown,
-  runId,
-  onAnnotate,
-  activeBlockIdx,
-  annotatedBlockIdxs,
-}: Props) {
+export function OutputAnnotator({ markdown, runId }: Props) {
   const blocks = useMemo(() => parseBlocks(markdown), [markdown]);
 
-  if (blocks.length === 0) {
-    return null;
+  const load = useAnnotations((s) => s.load);
+  const upsert = useAnnotations((s) => s.upsert);
+  const remove = useAnnotations((s) => s.remove);
+  const annotations = useOutputAnnotations(runId);
+
+  const [activeBlockIdx, setActiveBlockIdx] = useState<number | null>(null);
+
+  useEffect(() => {
+    if (runId) void load(runId);
+  }, [runId, load]);
+
+  if (blocks.length === 0) return null;
+
+  function toggle(block: Block) {
+    setActiveBlockIdx((cur) => (cur === block.idx ? null : block.idx));
+  }
+
+  function onSave(block: Block, text: string) {
+    void upsert(runId, {
+      blockIdx: block.idx,
+      blockHash: blockHash(block),
+      blockType: block.type,
+      blockContent: block.content,
+      text,
+    });
+  }
+
+  function onDelete(block: Block) {
+    void remove(runId, block.idx);
   }
 
   return (
@@ -60,8 +65,10 @@ export function OutputAnnotator({
           key={`${runId}-${block.idx}`}
           block={block}
           active={activeBlockIdx === block.idx}
-          hasAnnotation={annotatedBlockIdxs?.has(block.idx) ?? false}
-          onAnnotateClick={(b) => onAnnotate?.(b, runId)}
+          annotationText={annotations.get(block.idx)?.text}
+          onToggle={toggle}
+          onSave={onSave}
+          onDelete={onDelete}
         />
       ))}
     </div>

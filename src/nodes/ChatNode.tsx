@@ -297,14 +297,7 @@ export default function ChatNode({ id, data, variant = "chat" }: Props) {
           }
           onWheelCapture={(e) => e.stopPropagation()}
         >
-          <OutputAnnotator
-            markdown={data.output}
-            runId={id}
-            onAnnotate={(block) => {
-              // Day-1 scope: log the target. Day-2 will wire the annotation sidebar.
-              console.log("[annotator] clicked block", { nodeId: id, idx: block.idx, type: block.type });
-            }}
-          />
+          <OutputAnnotator markdown={data.output} runId={id} />
           {data.output.length > 200 && (
             <button
               className="chat-node__output-toggle"

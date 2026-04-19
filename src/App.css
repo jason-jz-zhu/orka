@@ -2190,6 +2190,77 @@ h5.block-card__heading, h6.block-card__heading { font-size: 11px; color: #8a92a0
 }
 .block-card__blockquote p { margin: 0; }
 
+/* Inline annotation editor that expands below a BlockCard when active. */
+.block-card__annot-editor {
+  margin-top: 6px;
+  padding: 8px;
+  background: rgba(59, 130, 246, 0.06);
+  border: 1px solid rgba(59, 130, 246, 0.35);
+  border-radius: 6px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.block-card__annot-textarea {
+  width: 100%;
+  box-sizing: border-box;
+  resize: vertical;
+  min-height: 48px;
+  background: #0a0d12;
+  color: #e6e6e6;
+  border: 1px solid #2b3038;
+  border-radius: 4px;
+  padding: 6px 8px;
+  font-family: inherit;
+  font-size: 12px;
+  line-height: 1.5;
+}
+.block-card__annot-textarea:focus {
+  outline: none;
+  border-color: #3b82f6;
+}
+.block-card__annot-actions {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.block-card__annot-spacer { flex: 1; }
+.block-card__annot-btn {
+  padding: 4px 10px;
+  font-size: 11px;
+  background: transparent;
+  color: #a8b0bf;
+  border: 1px solid #2b3038;
+  border-radius: 4px;
+  cursor: pointer;
+  transition: background 0.12s ease, color 0.12s ease, border-color 0.12s ease;
+}
+.block-card__annot-btn:hover {
+  background: rgba(255, 255, 255, 0.05);
+  color: #e6e6e6;
+}
+.block-card__annot-btn--primary {
+  background: #2a6df4;
+  color: #fff;
+  border-color: #2a6df4;
+}
+.block-card__annot-btn--primary:hover:not(:disabled) {
+  background: #1f5acc;
+  border-color: #1f5acc;
+}
+.block-card__annot-btn--primary:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+.block-card__annot-btn--danger {
+  color: #ef9a9a;
+  border-color: #5a2a2a;
+}
+.block-card__annot-btn--danger:hover {
+  background: rgba(239, 154, 154, 0.1);
+  color: #ffb4b4;
+}
+
 /* Rendered-markdown variant — overrides the pre-wrap baseline so block
    elements lay out naturally. */
 .chat-node__output--md {
