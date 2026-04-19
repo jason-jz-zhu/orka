@@ -232,20 +232,24 @@ export function SessionBriefCard({
   }
 
   const { brief } = state;
+  const progress = brief.progress.trim();
+  const nextLikely = brief.nextLikely.trim();
   return (
     <div className={klass}>
-      <div className="session-brief__row">
-        <span className="session-brief__label">You were:</span>
-        <span className="session-brief__value">{brief.youWere}</span>
-      </div>
-      <div className="session-brief__row">
-        <span className="session-brief__label">Progress:</span>
-        <span className="session-brief__value">{brief.progress}</span>
-      </div>
-      <div className="session-brief__row">
-        <span className="session-brief__label">Next likely:</span>
-        <span className="session-brief__value">{brief.nextLikely}</span>
-      </div>
+      <div className="session-brief__headline">{brief.youWere}</div>
+      {(progress || nextLikely) && (
+        <div className="session-brief__body">
+          {progress}
+          {progress && nextLikely ? " " : ""}
+          {nextLikely && (
+            <>
+              <span className="session-brief__arrow">→</span>
+              {" "}
+              {nextLikely}
+            </>
+          )}
+        </div>
+      )}
       <button
         type="button"
         className="session-brief__regen"
