@@ -59,6 +59,9 @@ export function SkillRunner({ skill, onOpenInCanvas }: Props) {
   const [showSchedule, setShowSchedule] = useState(false);
   const [showEvolve, setShowEvolve] = useState(false);
   const [schedule, setSchedule] = useState<Schedule | null>(null);
+  const [inputValues, setInputValues] = useState<Record<string, string>>(
+    () => seedInputValues(skill),
+  );
   const refreshSkills = useSkills((s) => s.refresh);
   const cleanupsRef = useRef<Array<() => void>>([]);
 
@@ -88,6 +91,8 @@ export function SkillRunner({ skill, onOpenInCanvas }: Props) {
     setRunId(freshRunId(skill.slug));
     setState(INITIAL);
     setReply("");
+    setInputValues(seedInputValues(skill));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [skill.slug]);
 
   // Subscribe to stream + done events for the current runId. Re-subscribes
@@ -147,7 +152,7 @@ export function SkillRunner({ skill, onOpenInCanvas }: Props) {
     try {
       await invokeCmd("run_agent_node", {
         id: runId,
-        prompt: `/${skill.slug}`,
+        prompt: composeSkillPrompt(skill, inputValues),
         resumeId: null,
         addDirs: [],
         allowedTools: null,
@@ -213,6 +218,35 @@ export function SkillRunner({ skill, onOpenInCanvas }: Props) {
           <div className="skill-runner__desc">{skill.description}</div>
         )}
       </div>
+
+      {skill.inputs && skill.inputs.length > 0 && (
+        <div className="skill-runner__inputs">
+          <div className="skill-runner__inputs-label">Inputs</div>
+          {skill.inputs.map((inp) => (
+            <div key={inp.name} className="skill-runner__input-row">
+              <label
+                className="skill-runner__input-label"
+                title={inp.description ?? undefined}
+              >
+                {inp.name}
+                {inp.type && inp.type !== "string" && (
+                  <span className="skill-runner__input-type">· {inp.type}</span>
+                )}
+              </label>
+              <input
+                className="skill-runner__input-field"
+                type="text"
+                value={inputValues[inp.name] ?? ""}
+                placeholder={inp.default ?? ""}
+                onChange={(e) =>
+                  setInputValues((v) => ({ ...v, [inp.name]: e.target.value }))
+                }
+                disabled={state.running}
+              />
+            </div>
+          ))}
+        </div>
+      )}
 
       <div className="skill-runner__controls">
         <button
@@ -329,4 +363,34 @@ function freshRunId(slug: string): string {
   const ts = Date.now().toString(36);
   const rnd = Math.random().toString(36).slice(2, 6);
   return `skill-${slug}-${ts}${rnd}`;
+}
+
+/** Seed the form with each input's default (falling back to empty). */
+function seedInputValues(skill: SkillMeta): Record<string, string> {
+  const out: Record<string, string> = {};
+  for (const inp of skill.inputs ?? []) {
+    out[inp.name] = inp.default ?? "";
+  }
+  return out;
+}
+
+/** Build the prompt sent to Claude. If the skill has inputs, they're
+ *  appended as a plain key: value block after the slash command. Claude
+ *  reads them as context for the skill's SKILL.md body, matching how
+ *  orka-cli passes --inputs. */
+function composeSkillPrompt(
+  skill: SkillMeta,
+  inputValues: Record<string, string>,
+): string {
+  const base = `/${skill.slug}`;
+  const inputs = skill.inputs ?? [];
+  if (inputs.length === 0) return base;
+  const lines = inputs
+    .map((inp) => {
+      const v = (inputValues[inp.name] ?? inp.default ?? "").trim();
+      return v ? `${inp.name}: ${v}` : null;
+    })
+    .filter((s): s is string => s !== null);
+  if (lines.length === 0) return base;
+  return `${base}\n\n${lines.join("\n")}`;
 }
