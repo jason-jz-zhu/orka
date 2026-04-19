@@ -116,14 +116,16 @@ function SessionCardImpl({
         sessionId={session.id}
         sessionPath={session.path}
         compact
-        // Auto-generate only when the session is settled:
-        //  - touched in the last 7 days (unlikely to revisit older)
-        //  - NOT currently live / mid-stream (brief would be stale
-        //    the moment Claude adds the next message)
-        // Users can always click the ✨ Brief me button manually.
+        // Auto-generate at stable checkpoints:
+        //  - session modified in last 7 days (older ones unlikely to be revisited)
+        //  - session is settled: either fully `done`, or live-but-awaiting-user
+        //    (Claude has stopped streaming and is waiting on you — a natural
+        //    pause point where the brief won't be stale).
+        // Streaming sessions (status=live && !awaiting_user) still get the
+        // manual ✨ Brief me button.
         autoGenerate={
           Date.now() - session.modified_ms < 7 * 24 * 60 * 60 * 1000 &&
-          session.status !== "live"
+          (session.status === "done" || session.awaiting_user === true)
         }
       />
 
