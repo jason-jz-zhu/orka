@@ -236,9 +236,40 @@ fn is_ghost_brief_session(path: &Path, signature: &str) -> bool {
 /// Read the last `max_lines` non-blank JSONL lines and render them as a
 /// compact human transcript. Keeps user messages verbatim, shortens
 /// assistant tool_use lines to `[tool: name]`, keeps assistant text.
+///
+/// For huge sessions (100+ MB JSONL are real — a 3000-turn agentic run
+/// with lots of tool use easily hits that), we only read a trailing
+/// window instead of loading the whole file. 256KB holds far more than
+/// 60 full-content lines in practice, so the tail sample is intact.
 fn extract_transcript(path: &Path, max_lines: usize) -> Result<String, String> {
-    let content = std::fs::read_to_string(path)
-        .map_err(|e| format!("read {}: {e}", path.display()))?;
+    const TAIL_WINDOW: u64 = 256 * 1024;
+    use std::io::{Read, Seek, SeekFrom};
+
+    let mut f = std::fs::File::open(path)
+        .map_err(|e| format!("open {}: {e}", path.display()))?;
+    let size = f
+        .metadata()
+        .map_err(|e| format!("stat {}: {e}", path.display()))?
+        .len();
+
+    let content = if size > TAIL_WINDOW {
+        let start = size - TAIL_WINDOW;
+        f.seek(SeekFrom::Start(start))
+            .map_err(|e| format!("seek {}: {e}", path.display()))?;
+        let mut buf = Vec::with_capacity(TAIL_WINDOW as usize);
+        f.read_to_end(&mut buf)
+            .map_err(|e| format!("read tail {}: {e}", path.display()))?;
+        // Drop any partial line at the very start of the window — we
+        // land mid-record almost always when seeking by byte offset.
+        let first_nl = buf.iter().position(|&b| b == b'\n').unwrap_or(0);
+        String::from_utf8_lossy(&buf[first_nl + 1..]).into_owned()
+    } else {
+        let mut s = String::new();
+        f.read_to_string(&mut s)
+            .map_err(|e| format!("read {}: {e}", path.display()))?;
+        s
+    };
+
     let lines: Vec<&str> = content.lines().filter(|l| !l.trim().is_empty()).collect();
     let slice = if lines.len() > max_lines {
         &lines[lines.len() - max_lines..]
@@ -348,14 +379,21 @@ Keep each value under 100 characters. Use second-person phrasing (\"You were deb
 }
 
 async fn call_claude_print(prompt: &str) -> Result<String, String> {
-    // `--no-session-persistence` is critical here: without it, every brief
-    // generation would itself be written to `~/.claude/projects/` as a new
-    // session. Orka would then see those briefs as real sessions and try
-    // to auto-brief THEM — infinite pollution. This flag is why `claude -p`
-    // has a "print mode" distinct from REPL mode.
+    // Brief generation is a dead-simple JSON extraction task — Haiku
+    // handles it perfectly and is 3-5x faster than Sonnet for this
+    // kind of short structured output. The Orka sessions surface has
+    // dozens of briefs to produce; using Haiku turns 30s into 5s on
+    // large sessions.
+    //
+    // `--no-session-persistence` is critical: without it, every brief
+    // generation would itself be written to `~/.claude/projects/` as a
+    // new session. Orka would then see those briefs as real sessions
+    // and try to auto-brief THEM — infinite pollution.
     let output = tokio::process::Command::new("claude")
         .arg("-p")
         .arg("--no-session-persistence")
+        .arg("--model")
+        .arg("haiku")
         .arg(prompt)
         .output()
         .await
