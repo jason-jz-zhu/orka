@@ -16,6 +16,9 @@ const SKILL_SCHEDULE_PREFIX = "skill:";
 
 type Props = {
   skill: SkillMeta;
+  /** Supplied by SkillsTab → App. Opens the composite skill's DAG in
+   *  the canvas editor (reveals Studio tab + loads graph.json). */
+  onOpenInCanvas?: (slug: string, path: string) => Promise<void> | void;
 };
 
 type RunState = {
@@ -46,7 +49,7 @@ const INITIAL: RunState = {
  * store involvement. The annotator owns persistence for any notes the
  * user adds, keyed by a stable runId derived from skill slug.
  */
-export function SkillRunner({ skill }: Props) {
+export function SkillRunner({ skill, onOpenInCanvas }: Props) {
   // A stable id for this runner instance. Annotations persist under this
   // key so revisiting the skill reloads notes on the same output if
   // nothing's been re-run. We reset on explicit run.
@@ -241,13 +244,14 @@ export function SkillRunner({ skill }: Props) {
         >
           💡 Evolve
         </button>
-        {skill.has_graph && (
-          <span
+        {skill.has_graph && onOpenInCanvas && (
+          <button
             className="skill-runner__graph-hint"
-            title="This skill has an embedded DAG block. Claude executes it from the prose directly; the canvas (?canvas=1) is only needed if you want to edit the graph visually."
+            onClick={() => void onOpenInCanvas(skill.slug, skill.path)}
+            title="Open this multi-step skill's DAG in the canvas editor"
           >
-            multi-step
-          </span>
+            ◆ Edit in canvas
+          </button>
         )}
         {typeof state.costUsd === "number" && state.costUsd > 0 && (
           <span className="skill-runner__cost">

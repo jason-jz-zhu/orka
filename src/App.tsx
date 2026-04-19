@@ -4,10 +4,11 @@ import {
   Controls,
   MiniMap,
   type NodeTypes,
+  type Edge,
 } from "@xyflow/react";
 import "@xyflow/react/dist/style.css";
 import { useEffect, useRef, useState } from "react";
-import { useGraph } from "./lib/graph-store";
+import { useGraph, type OrkaNode } from "./lib/graph-store";
 import ChatNode from "./nodes/ChatNode";
 import AgentNode from "./nodes/AgentNode";
 import KnowledgeBaseNode from "./nodes/KnowledgeBaseNode";
@@ -55,13 +56,17 @@ const nodeTypes: NodeTypes = {
 
 type Tab = "skills" | "pipeline" | "monitor" | "runs";
 
-/** Canvas tab is hidden from the default nav — it's still the right tool
- *  for composite-skill authoring, but the new Skills tab handles the
- *  99% "pick a skill, run, annotate, continue" flow without it.
- *  Set ?canvas=1 in the dev URL to re-enable the Studio tab. */
-const CANVAS_ENABLED =
-  typeof window !== "undefined" &&
-  new URLSearchParams(window.location.search).get("canvas") === "1";
+/** Read initial canvas visibility from URL (?canvas=1) or a localStorage
+ *  flag that persists across restarts once the user opts in once. */
+function initialCanvasEnabled(): boolean {
+  if (typeof window === "undefined") return false;
+  if (new URLSearchParams(window.location.search).get("canvas") === "1") return true;
+  try {
+    return localStorage.getItem("orka-canvas-enabled") === "1";
+  } catch {
+    return false;
+  }
+}
 
 export default function App() {
   usePersistence();
@@ -87,6 +92,77 @@ export default function App() {
   const [showGenerate, setShowGenerate] = useState(false);
   const [showSettings, setShowSettings] = useState(false);
   const [showModels, setShowModels] = useState(false);
+  const [canvasEnabled, setCanvasEnabled] = useState<boolean>(() => initialCanvasEnabled());
+
+  // Persist canvas visibility so re-enabling via an "Open in Canvas"
+  // button sticks across app restarts.
+  useEffect(() => {
+    try {
+      if (canvasEnabled) {
+        localStorage.setItem("orka-canvas-enabled", "1");
+      } else {
+        localStorage.removeItem("orka-canvas-enabled");
+      }
+    } catch {}
+  }, [canvasEnabled]);
+
+  /** Called by SkillsTab → SkillRunner when the user wants to open a
+   *  composite skill's DAG in the canvas editor. Reveals the Studio
+   *  tab, switches to it, then loads the skill graph via the existing
+   *  load_skill_md + setGraph path. */
+  async function openSkillInCanvas(skillSlug: string, skillPath: string) {
+    setCanvasEnabled(true);
+    setTab("pipeline");
+    try {
+      const raw = await invokeCmd<string>("load_skill_md", { path: skillPath });
+      const parsed = JSON.parse(raw);
+      const graphData = parsed.graph;
+      if (!graphData || !Array.isArray(graphData.nodes)) {
+        await alertDialog(
+          `"${skillSlug}" doesn't contain a runnable graph block.`,
+        );
+        return;
+      }
+      const nodes: OrkaNode[] = graphData.nodes.map((n: any) => {
+        const pos = Array.isArray(n.pos)
+          ? { x: n.pos[0], y: n.pos[1] }
+          : { x: 200, y: 200 };
+        if (n.type === "skill_ref") {
+          return {
+            id: n.id,
+            type: "skill_ref" as const,
+            position: pos,
+            data: { skill: n.data?.skill ?? "", bind: n.data?.bind ?? {} },
+          };
+        }
+        if (n.type === "agent" || n.type === "chat") {
+          return {
+            id: n.id,
+            type: n.type as "agent" | "chat",
+            position: pos,
+            data: {
+              prompt: n.data?.prompt ?? "",
+              output: "",
+              running: false,
+            },
+          };
+        }
+        return {
+          id: n.id,
+          type: "agent" as const,
+          position: pos,
+          data: { prompt: n.data?.prompt ?? "", output: "", running: false },
+        };
+      });
+      const loadedEdges: Edge[] = (graphData.edges ?? []).map(
+        (e: [string, string]) => ({ id: `e-${e[0]}-${e[1]}`, source: e[0], target: e[1] }),
+      );
+      setGraph(nodes, loadedEdges);
+      setActivePipelineName(skillSlug);
+    } catch (e) {
+      await alertDialog(`Failed to load skill graph: ${e}`);
+    }
+  }
   const [scheduleFor, setScheduleFor] = useState<string | null>(null);
   const [scheduledNames, setScheduledNames] = useState<Set<string>>(
     () => new Set()
@@ -441,7 +517,7 @@ export default function App() {
           >
             Runs
           </button>
-          {CANVAS_ENABLED && (
+          {canvasEnabled && (
             <button
               role="tab"
               aria-selected={tab === "pipeline"}
@@ -508,7 +584,7 @@ export default function App() {
       {/* All tabs stay mounted; hide the inactive ones with `hidden` (display:none).
           Keeps SessionDashboard + SkillsTab state + ReactFlow instance alive across switches. */}
       <div className="main" hidden={tab !== "skills"}>
-        <SkillsTab />
+        <SkillsTab onOpenInCanvas={openSkillInCanvas} />
       </div>
       <div className="main" hidden={tab !== "pipeline"}>
         <div className="sidebar">

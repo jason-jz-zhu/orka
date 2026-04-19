@@ -16,6 +16,11 @@ function extractTapPrefix(slug: string): string | null {
   return null;
 }
 
+type SkillsTabProps = {
+  /** Supplied by App — opens a composite skill's DAG in the canvas. */
+  onOpenInCanvas?: (slug: string, path: string) => Promise<void> | void;
+};
+
 /**
  * Skills tab — the new default entry point.
  *
@@ -26,7 +31,7 @@ function extractTapPrefix(slug: string): string | null {
  * hook wires, hit Run All" flow for atomic skills. Canvas is no longer
  * required for the daily run-a-skill loop.
  */
-export function SkillsTab() {
+export function SkillsTab({ onOpenInCanvas }: SkillsTabProps = {}) {
   const skills = useSkills((s) => s.skills);
   const loading = useSkills((s) => s.loading);
   const refresh = useSkills((s) => s.refresh);
@@ -121,7 +126,11 @@ export function SkillsTab() {
 
       <section className="skills-tab__runner">
         {selected ? (
-          <SkillRunner key={selected.slug} skill={selected} />
+          <SkillRunner
+            key={selected.slug}
+            skill={selected}
+            onOpenInCanvas={onOpenInCanvas}
+          />
         ) : (
           <div className="skills-tab__empty">
             <div className="skills-tab__empty-title">Pick a skill on the left</div>
