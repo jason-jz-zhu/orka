@@ -13,6 +13,7 @@ import { useGraph } from "../lib/graph-store";
 import SessionCard from "./SessionCard";
 import SessionDetail from "./SessionDetail";
 import PipelineNodeCard from "./PipelineNodeCard";
+import { SynthesisModal } from "./SynthesisModal";
 import { useReviewedSessions } from "../hooks/useReviewedSessions";
 import {
   playReadyPing,
@@ -48,6 +49,8 @@ export default function SessionDashboard({
   const [toast, setToast] = useState<string | null>(null);
   const { reviewedMap, markReviewed } = useReviewedSessions();
   const [soundOn, setSoundOn] = useState<boolean>(() => isSoundEnabled());
+  const [synthSelected, setSynthSelected] = useState<Set<string>>(new Set());
+  const [showSynth, setShowSynth] = useState(false);
   // Per-session awaiting_user from last frame — used to detect the
   // "Claude just finished a turn" transition so we can ping and reset
   // the reviewed flag at the right moments.
@@ -342,13 +345,57 @@ export default function SessionDashboard({
               isReviewed={reviewedMap[s.id] === s.modified_ms}
               isPinned={pinnedSessionIds.has(s.id)}
               selected={selected?.id === s.id}
+              synthSelected={synthSelected.has(s.id)}
               onOpen={openSession}
               onPin={pinSession}
               onUnpin={unpinSession}
+              onSynthToggle={(session) => {
+                setSynthSelected((prev) => {
+                  const next = new Set(prev);
+                  if (next.has(session.id)) next.delete(session.id);
+                  else next.add(session.id);
+                  return next;
+                });
+              }}
             />
           ))}
         </div>
       </div>
+
+      {synthSelected.size > 0 && (
+        <div className="dashboard__synth-bar">
+          <span className="dashboard__synth-hint">
+            {synthSelected.size} session{synthSelected.size === 1 ? "" : "s"} selected ·
+            shift-click to toggle
+          </span>
+          <div className="dashboard__synth-spacer" />
+          <button
+            className="dashboard__synth-btn dashboard__synth-btn--ghost"
+            onClick={() => setSynthSelected(new Set())}
+          >
+            Clear
+          </button>
+          <button
+            className="dashboard__synth-btn"
+            disabled={synthSelected.size < 2}
+            onClick={() => setShowSynth(true)}
+            title={
+              synthSelected.size < 2
+                ? "Shift-click a second session to enable"
+                : "Ask a question across all selected sessions"
+            }
+          >
+            📚 Ask across {synthSelected.size}
+          </button>
+        </div>
+      )}
+
+      {showSynth && (
+        <SynthesisModal
+          sources={sessions.filter((s) => synthSelected.has(s.id))}
+          onClose={() => setShowSynth(false)}
+        />
+      )}
 
       {toast && <div className="dashboard__toast">{toast}</div>}
 

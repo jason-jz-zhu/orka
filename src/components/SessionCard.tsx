@@ -48,9 +48,13 @@ type Props = {
   isReviewed: boolean;
   isPinned: boolean;
   selected: boolean;
+  /** Currently in the user's cross-session synthesis selection. */
+  synthSelected?: boolean;
   onOpen: (s: SessionInfo) => void;
   onPin: (s: SessionInfo) => void;
   onUnpin: (s: SessionInfo) => void;
+  /** Called when the user shift-clicks or toggles the synth checkbox. */
+  onSynthToggle?: (s: SessionInfo) => void;
 };
 
 async function focusTerminal(path: string) {
@@ -71,9 +75,11 @@ function SessionCardImpl({
   isReviewed,
   isPinned,
   selected,
+  synthSelected,
   onOpen,
   onPin,
   onUnpin,
+  onSynthToggle,
 }: Props) {
   bump("SessionCard");
   const state = stateOf(session, isReviewed);
@@ -92,9 +98,19 @@ function SessionCardImpl({
     <div
       className={
         `session-card session-card--${state}` +
-        (selected ? " session-card--selected" : "")
+        (selected ? " session-card--selected" : "") +
+        (synthSelected ? " session-card--synth-selected" : "")
       }
-      onClick={() => onOpen(session)}
+      onClick={(e) => {
+        // Shift+click = toggle cross-session synthesis selection.
+        // Regular click = open the session drawer.
+        if (e.shiftKey && onSynthToggle) {
+          e.preventDefault();
+          onSynthToggle(session);
+          return;
+        }
+        onOpen(session);
+      }}
     >
       <div className="session-card__head">
         <span className="session-card__status">

@@ -1,5 +1,6 @@
 mod annotations;
 mod session_brief;
+mod session_synthesis;
 mod skill_evolution;
 mod trusted_taps;
 mod dest_profiles;
@@ -1068,6 +1069,7 @@ pub fn run() {
             trusted_taps::remove_custom_tap,
             skill_evolution::suggest_skill_evolution,
             skill_evolution::apply_skill_evolution,
+            session_synthesis::synthesize_sessions,
             dest_profiles::list_destination_profiles,
             dest_profiles::save_destination_profile,
             dest_profiles::delete_destination_profile,
