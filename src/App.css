@@ -3485,6 +3485,116 @@ h5.block-card__heading, h6.block-card__heading { font-size: 11px; color: #8a92a0
   color: #fbbf24;
   border-color: rgba(251, 191, 36, 0.4);
 }
+.skill-runner__evolve-btn {
+  background: transparent;
+  color: #a8b0bf;
+  border: 1px solid #2b3038;
+  padding: 8px 14px;
+  border-radius: 6px;
+  cursor: pointer;
+  font-size: 12px;
+  font-weight: 500;
+  transition: background 0.12s ease, color 0.12s ease, border-color 0.12s ease;
+}
+.skill-runner__evolve-btn:hover {
+  background: rgba(168, 85, 247, 0.12);
+  color: #c4b5fd;
+  border-color: rgba(168, 85, 247, 0.4);
+}
+
+/* Evolution modal — summary / rationale / proposed markdown / apply */
+.evolution-modal {
+  max-width: 720px;
+  width: 90vw;
+  max-height: 85vh;
+  overflow-y: auto;
+}
+.evolution-modal__loading {
+  padding: 30px 20px;
+  text-align: center;
+  color: #8a92a0;
+  font-size: 13px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 10px;
+}
+.evolution-modal__pulse {
+  font-size: 28px;
+  animation: pulse 1.5s ease-in-out infinite;
+}
+.evolution-modal__hint {
+  font-size: 11px;
+  color: #64748b;
+}
+.evolution-modal__error {
+  padding: 20px;
+  color: #fca5a5;
+}
+.evolution-modal__error-title {
+  font-size: 14px;
+  font-weight: 600;
+  margin-bottom: 8px;
+}
+.evolution-modal__error-body {
+  font-size: 12px;
+  color: #e6e6e6;
+  background: rgba(239, 68, 68, 0.08);
+  border: 1px solid rgba(239, 68, 68, 0.3);
+  border-radius: 4px;
+  padding: 10px;
+  white-space: pre-wrap;
+  line-height: 1.5;
+}
+.evolution-modal__meta {
+  font-size: 11px;
+  color: #8a92a0;
+  padding: 0 20px 10px;
+  border-bottom: 1px solid #22262e;
+  margin-bottom: 14px;
+}
+.evolution-modal__section {
+  padding: 0 20px 14px;
+}
+.evolution-modal__section-label {
+  font-size: 10px;
+  color: #64748b;
+  text-transform: uppercase;
+  letter-spacing: 0.6px;
+  margin-bottom: 5px;
+}
+.evolution-modal__summary {
+  font-size: 14px;
+  color: #f4f6fa;
+  line-height: 1.5;
+  font-weight: 500;
+}
+.evolution-modal__rationale {
+  font-size: 12px;
+  color: #cbd5e1;
+  line-height: 1.6;
+}
+.evolution-modal__markdown {
+  font-size: 11px;
+  font-family: ui-monospace, SFMono-Regular, monospace;
+  background: #0a0d12;
+  border: 1px solid #22262e;
+  border-radius: 4px;
+  padding: 10px 12px;
+  max-height: 320px;
+  overflow: auto;
+  white-space: pre-wrap;
+  color: #cbd5e1;
+  line-height: 1.5;
+}
+.evolution-modal__actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  padding: 12px 20px 4px;
+  border-top: 1px solid #22262e;
+  margin-top: 6px;
+}
 .skill-runner__cost,
 .skill-runner__tools {
   font-size: 11px;

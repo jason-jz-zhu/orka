@@ -4,7 +4,9 @@ import { parseLine } from "../lib/stream-parser";
 import { alertDialog } from "../lib/dialogs";
 import { OutputAnnotator } from "./OutputAnnotator";
 import ScheduleModal from "./ScheduleModal";
+import { SkillEvolutionModal } from "./SkillEvolutionModal";
 import { getSchedule, describeSchedule, type Schedule } from "../lib/schedules";
+import { useSkills } from "../lib/skills";
 import type { SkillMeta } from "../lib/skills";
 
 /** Prefix for schedules targeting an atomic skill (as opposed to a
@@ -52,7 +54,9 @@ export function SkillRunner({ skill }: Props) {
   const [state, setState] = useState<RunState>(INITIAL);
   const [reply, setReply] = useState("");
   const [showSchedule, setShowSchedule] = useState(false);
+  const [showEvolve, setShowEvolve] = useState(false);
   const [schedule, setSchedule] = useState<Schedule | null>(null);
+  const refreshSkills = useSkills((s) => s.refresh);
   const cleanupsRef = useRef<Array<() => void>>([]);
 
   const scheduleName = `${SKILL_SCHEDULE_PREFIX}${skill.slug}`;
@@ -239,6 +243,13 @@ export function SkillRunner({ skill }: Props) {
             >
               {schedule?.enabled ? `⏰ ${describeSchedule(schedule)}` : "⏰ Schedule"}
             </button>
+            <button
+              className="skill-runner__evolve-btn"
+              onClick={() => setShowEvolve(true)}
+              title="Suggest SKILL.md updates based on your annotations on past runs"
+            >
+              💡 Evolve
+            </button>
             {!hasOutput && !state.running && (
               <button
                 className="skill-runner__run-btn skill-runner__run-btn--ghost"
@@ -303,6 +314,15 @@ export function SkillRunner({ skill }: Props) {
         <ScheduleModal
           pipelineName={scheduleName}
           onClose={() => setShowSchedule(false)}
+        />
+      )}
+      {showEvolve && (
+        <SkillEvolutionModal
+          slug={skill.slug}
+          onClose={() => setShowEvolve(false)}
+          onApplied={() => {
+            void refreshSkills();
+          }}
         />
       )}
     </div>
