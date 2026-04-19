@@ -154,7 +154,15 @@ export const useAnnotations = create<State>((set, get) => ({
   },
 }));
 
+/**
+ * Stable empty fallback. Returning `new Map()` from a selector causes
+ * zustand v5 to detect a "state change" every render (Object.is fails on
+ * fresh instances) and recurse into infinite re-render, crashing the app.
+ * Always return this singleton when the outputId has no annotations yet.
+ */
+const EMPTY_ANNOTATIONS: Map<number, Annotation> = new Map();
+
 /** Hook helper: reactive Annotation map for a specific outputId. */
 export function useOutputAnnotations(outputId: string): Map<number, Annotation> {
-  return useAnnotations((s) => s.byOutput.get(outputId) ?? new Map());
+  return useAnnotations((s) => s.byOutput.get(outputId) ?? EMPTY_ANNOTATIONS);
 }
