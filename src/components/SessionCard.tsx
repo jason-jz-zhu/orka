@@ -112,7 +112,16 @@ function SessionCardImpl({
         <span className="session-card__ask-text">{ask}</span>
       </div>
 
-      <SessionBriefCard sessionId={session.id} sessionPath={session.path} compact />
+      <SessionBriefCard
+        sessionId={session.id}
+        sessionPath={session.path}
+        compact
+        // Auto-generate for sessions touched in the last 7 days. Older
+        // ones keep the manual button — they're unlikely to be revisited,
+        // and generating them on every app start would waste claude -p
+        // calls.
+        autoGenerate={Date.now() - session.modified_ms < 7 * 24 * 60 * 60 * 1000}
+      />
 
 
       {now && (

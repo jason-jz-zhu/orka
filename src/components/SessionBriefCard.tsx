@@ -15,6 +15,12 @@ type Props = {
   sessionPath: string;
   /** Compact variant squeezes into a narrow card; default expanded. */
   compact?: boolean;
+  /**
+   * When true (default), auto-generate a brief on mount if no cached one
+   * exists. Throttled globally so many session cards don't all hit
+   * `claude -p` at once. Pass false for older / less-relevant sessions.
+   */
+  autoGenerate?: boolean;
 };
 
 type State =
@@ -24,24 +30,72 @@ type State =
   | { kind: "ready"; brief: SessionBrief }
   | { kind: "error"; message: string };
 
+// ────────── global concurrency throttle ──────────────────────────────
+//
+// Each brief generation spawns one `claude -p` subprocess. Without a cap,
+// loading the Sessions tab with 20 fresh sessions would fire 20 parallel
+// claude processes — CPU spike, possible rate-limit, and terrible UX
+// feedback (everything pending at once).
+//
+// Limit to 2 concurrent generations. The queue is FIFO, so the first
+// visible cards brief first.
+
+const MAX_CONCURRENT_GENERATIONS = 2;
+let activeJobs = 0;
+const jobQueue: Array<() => Promise<void>> = [];
+
+function scheduleBriefJob(job: () => Promise<void>): { cancel: () => void } {
+  let cancelled = false;
+  const wrapped = async () => {
+    if (cancelled) return;
+    activeJobs++;
+    try {
+      await job();
+    } finally {
+      activeJobs--;
+      const next = jobQueue.shift();
+      if (next) void next();
+    }
+  };
+  if (activeJobs < MAX_CONCURRENT_GENERATIONS) {
+    void wrapped();
+  } else {
+    jobQueue.push(wrapped);
+  }
+  return {
+    cancel: () => {
+      cancelled = true;
+      const i = jobQueue.indexOf(wrapped);
+      if (i >= 0) jobQueue.splice(i, 1);
+    },
+  };
+}
+
 /**
- * "You were: …" card. On mount, checks for a cached brief under the
- * current JSONL mtime. If present, render it instantly. If absent,
- * leave an explicit "Generate brief" affordance so the user controls
- * when to spend a claude -p call (and sees the latency, short as it is).
+ * "You were: …" card. Auto-generates on mount if no cached brief exists
+ * and `autoGenerate` is true (default). Parent typically passes false
+ * for sessions older than ~7 days to avoid hammering claude -p for
+ * sessions unlikely to be revisited.
  *
- * Rationale for manual generation: auto-generating on every session open
- * would blast claude-p for every pinned session on every app start. The
- * cache is mtime-aware, so a one-time click per new session is fine.
+ * Cache is mtime-keyed on the backend: if the session's JSONL hasn't
+ * changed since the last brief was written, we hydrate instantly. If
+ * it has, we regenerate once and cache.
  */
-export function SessionBriefCard({ sessionId, sessionPath, compact }: Props) {
+export function SessionBriefCard({
+  sessionId,
+  sessionPath,
+  compact,
+  autoGenerate = true,
+}: Props) {
   const [state, setState] = useState<State>({ kind: "idle" });
   const mountedRef = useRef(true);
+  const jobHandleRef = useRef<{ cancel: () => void } | null>(null);
 
   useEffect(() => {
     mountedRef.current = true;
     return () => {
       mountedRef.current = false;
+      jobHandleRef.current?.cancel();
     };
   }, []);
 
@@ -57,9 +111,34 @@ export function SessionBriefCard({ sessionId, sessionPath, compact }: Props) {
         if (cancelled) return;
         if (cached) {
           setState({ kind: "ready", brief: cached });
-        } else {
-          setState({ kind: "idle" });
+          return;
         }
+        // No cache. If auto-generation is enabled, enqueue one via the
+        // shared throttle. Otherwise leave idle so the user can trigger
+        // manually.
+        if (!autoGenerate) {
+          setState({ kind: "idle" });
+          return;
+        }
+        setState({ kind: "generating" });
+        jobHandleRef.current = scheduleBriefJob(async () => {
+          try {
+            const brief = await invokeCmd<SessionBrief>("generate_session_brief", {
+              sessionId,
+              sessionPath,
+            });
+            if (mountedRef.current && !cancelled)
+              setState({ kind: "ready", brief });
+          } catch (e) {
+            // Auto-gen failures fall back to idle (offer manual retry)
+            // rather than showing a loud error — a missing `claude` CLI
+            // or auth issue shouldn't plaster every card with red text.
+            if (mountedRef.current && !cancelled) {
+              console.warn(`[session-brief] auto-gen failed for ${sessionId}:`, e);
+              setState({ kind: "idle" });
+            }
+          }
+        });
       } catch (e) {
         if (!cancelled) setState({ kind: "error", message: String(e) });
       }
@@ -67,9 +146,9 @@ export function SessionBriefCard({ sessionId, sessionPath, compact }: Props) {
     return () => {
       cancelled = true;
     };
-  }, [sessionId, sessionPath]);
+  }, [sessionId, sessionPath, autoGenerate]);
 
-  async function generate() {
+  async function generateNow() {
     setState({ kind: "generating" });
     try {
       const brief = await invokeCmd<SessionBrief>("generate_session_brief", {
@@ -87,7 +166,7 @@ export function SessionBriefCard({ sessionId, sessionPath, compact }: Props) {
     try {
       await invokeCmd("clear_session_brief", { sessionId });
     } catch {}
-    await generate();
+    await generateNow();
   }
 
   const klass = `session-brief${compact ? " session-brief--compact" : ""}`;
@@ -108,7 +187,7 @@ export function SessionBriefCard({ sessionId, sessionPath, compact }: Props) {
           className="session-brief__generate"
           onClick={(e) => {
             e.stopPropagation();
-            void generate();
+            void generateNow();
           }}
           title="Have Claude summarize what this session was about"
         >
@@ -136,8 +215,9 @@ export function SessionBriefCard({ sessionId, sessionPath, compact }: Props) {
             className="session-brief__regen"
             onClick={(e) => {
               e.stopPropagation();
-              void generate();
+              void generateNow();
             }}
+            title={state.message}
           >
             Retry
           </button>
