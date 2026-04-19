@@ -211,104 +211,93 @@ export function SkillRunner({ skill }: Props) {
         )}
       </div>
 
-      {skill.has_graph ? (
-        <div className="skill-runner__composite-note">
-          This is a composite skill — it contains a multi-step DAG. Open
-          the canvas (set <code>?canvas=1</code> in the URL) to run it as
-          a pipeline. Atomic-skill runs in this surface coming for
-          composites later.
-        </div>
-      ) : (
-        <>
-          <div className="skill-runner__controls">
-            <button
-              className="skill-runner__run-btn"
-              onClick={hasOutput ? runFresh : run}
-              disabled={state.running}
-            >
-              {state.running
-                ? "Running…"
-                : hasOutput
-                  ? "Run again (fresh session)"
-                  : "▶ Run skill"}
-            </button>
-            <button
-              className="skill-runner__schedule-btn"
-              onClick={() => setShowSchedule(true)}
-              title={
-                schedule?.enabled
-                  ? `Scheduled: ${describeSchedule(schedule)}`
-                  : "Set up a repeating schedule for this skill"
+      <div className="skill-runner__controls">
+        <button
+          className="skill-runner__run-btn"
+          onClick={hasOutput ? runFresh : run}
+          disabled={state.running}
+        >
+          {state.running
+            ? "Running…"
+            : hasOutput
+              ? "Run again (fresh session)"
+              : "▶ Run skill"}
+        </button>
+        <button
+          className="skill-runner__schedule-btn"
+          onClick={() => setShowSchedule(true)}
+          title={
+            schedule?.enabled
+              ? `Scheduled: ${describeSchedule(schedule)}`
+              : "Set up a repeating schedule for this skill"
+          }
+        >
+          {schedule?.enabled ? `⏰ ${describeSchedule(schedule)}` : "⏰ Schedule"}
+        </button>
+        <button
+          className="skill-runner__evolve-btn"
+          onClick={() => setShowEvolve(true)}
+          title="Suggest SKILL.md updates based on your annotations on past runs"
+        >
+          💡 Evolve
+        </button>
+        {skill.has_graph && (
+          <span
+            className="skill-runner__graph-hint"
+            title="This skill has an embedded DAG block. Claude executes it from the prose directly; the canvas (?canvas=1) is only needed if you want to edit the graph visually."
+          >
+            multi-step
+          </span>
+        )}
+        {typeof state.costUsd === "number" && state.costUsd > 0 && (
+          <span className="skill-runner__cost">
+            ${state.costUsd.toFixed(4)}
+          </span>
+        )}
+        {state.toolCount > 0 && (
+          <span className="skill-runner__tools">
+            🔧 {state.toolCount} {state.toolCount === 1 ? "tool" : "tools"}
+          </span>
+        )}
+        {state.running && <span className="skill-runner__pulse">⋯ streaming</span>}
+      </div>
+
+      {hasError && (
+        <div className="skill-runner__error">✗ {state.error}</div>
+      )}
+
+      {hasOutput && (
+        <OutputAnnotator
+          markdown={state.output}
+          runId={runId}
+          sourceTitle={skill.slug}
+          sessionId={state.sessionId}
+        />
+      )}
+
+      {hasOutput && !state.running && state.sessionId && (
+        <div className="skill-runner__reply">
+          <textarea
+            className="skill-runner__reply-input"
+            placeholder="Reply to continue this conversation… (⌘+Enter to send)"
+            value={reply}
+            onChange={(e) => setReply(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) {
+                e.preventDefault();
+                void continueConversation();
               }
-            >
-              {schedule?.enabled ? `⏰ ${describeSchedule(schedule)}` : "⏰ Schedule"}
-            </button>
-            <button
-              className="skill-runner__evolve-btn"
-              onClick={() => setShowEvolve(true)}
-              title="Suggest SKILL.md updates based on your annotations on past runs"
-            >
-              💡 Evolve
-            </button>
-            {!hasOutput && !state.running && (
-              <button
-                className="skill-runner__run-btn skill-runner__run-btn--ghost"
-                onClick={run}
-                disabled={state.running}
-                style={{ display: "none" }}
-              />
-            )}
-            {typeof state.costUsd === "number" && state.costUsd > 0 && (
-              <span className="skill-runner__cost">
-                ${state.costUsd.toFixed(4)}
-              </span>
-            )}
-            {state.toolCount > 0 && (
-              <span className="skill-runner__tools">
-                🔧 {state.toolCount} {state.toolCount === 1 ? "tool" : "tools"}
-              </span>
-            )}
-            {state.running && <span className="skill-runner__pulse">⋯ streaming</span>}
-          </div>
-
-          {hasError && (
-            <div className="skill-runner__error">✗ {state.error}</div>
-          )}
-
-          {hasOutput && (
-            <OutputAnnotator
-              markdown={state.output}
-              runId={runId}
-              sourceTitle={skill.slug}
-              sessionId={state.sessionId}
-            />
-          )}
-
-          {hasOutput && !state.running && state.sessionId && (
-            <div className="skill-runner__reply">
-              <textarea
-                className="skill-runner__reply-input"
-                placeholder="Reply to continue this conversation… (⌘+Enter to send)"
-                value={reply}
-                onChange={(e) => setReply(e.target.value)}
-                onKeyDown={(e) => {
-                  if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) {
-                    e.preventDefault();
-                    void continueConversation();
-                  }
-                }}
-                rows={2}
-              />
-              <button
-                className="skill-runner__reply-btn"
-                onClick={() => void continueConversation()}
-                disabled={!reply.trim()}
-              >
-                ↪ Continue
-              </button>
-            </div>
-          )}
-        </>
+            }}
+            rows={2}
+          />
+          <button
+            className="skill-runner__reply-btn"
+            onClick={() => void continueConversation()}
+            disabled={!reply.trim()}
+          >
+            ↪ Continue
+          </button>
+        </div>
       )}
       {showSchedule && (
         <ScheduleModal
