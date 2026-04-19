@@ -21,6 +21,7 @@ import SkillPalette from "./components/SkillPalette";
 import RunsDashboard from "./components/RunsDashboard";
 import SessionDashboard from "./components/SessionDashboard";
 import StatusBar from "./components/StatusBar";
+import { SkillsTab } from "./components/SkillsTab";
 import { usePersistence } from "./lib/persistence";
 import { runAll, requestRunAllSkip } from "./lib/run-all";
 import { invokeCmd } from "./lib/tauri";
@@ -51,7 +52,15 @@ const nodeTypes: NodeTypes = {
   skill_ref: SkillRefNode as any,
 };
 
-type Tab = "pipeline" | "monitor" | "runs";
+type Tab = "skills" | "pipeline" | "monitor" | "runs";
+
+/** Canvas tab is hidden from the default nav — it's still the right tool
+ *  for composite-skill authoring, but the new Skills tab handles the
+ *  99% "pick a skill, run, annotate, continue" flow without it.
+ *  Set ?canvas=1 in the dev URL to re-enable the Studio tab. */
+const CANVAS_ENABLED =
+  typeof window !== "undefined" &&
+  new URLSearchParams(window.location.search).get("canvas") === "1";
 
 export default function App() {
   usePersistence();
@@ -70,7 +79,7 @@ export default function App() {
   } = useGraph();
   const [running, setRunning] = useState(false);
   const [runStatus, setRunStatus] = useState<string | null>(null);
-  const [tab, setTab] = useState<Tab>("monitor");
+  const [tab, setTab] = useState<Tab>("skills");
   const [showOnboarding, setShowOnboarding] = useState(
     () => !hasCompletedOnboarding()
   );
@@ -369,19 +378,19 @@ export default function App() {
         <div className="tabs" role="tablist">
           <button
             role="tab"
+            aria-selected={tab === "skills"}
+            className={"tabs__item" + (tab === "skills" ? " tabs__item--active" : "")}
+            onClick={() => setTab("skills")}
+          >
+            Skills
+          </button>
+          <button
+            role="tab"
             aria-selected={tab === "monitor"}
             className={"tabs__item" + (tab === "monitor" ? " tabs__item--active" : "")}
             onClick={() => setTab("monitor")}
           >
             Live
-          </button>
-          <button
-            role="tab"
-            aria-selected={tab === "pipeline"}
-            className={"tabs__item" + (tab === "pipeline" ? " tabs__item--active" : "")}
-            onClick={() => setTab("pipeline")}
-          >
-            Studio
           </button>
           <button
             role="tab"
@@ -391,6 +400,17 @@ export default function App() {
           >
             Runs
           </button>
+          {CANVAS_ENABLED && (
+            <button
+              role="tab"
+              aria-selected={tab === "pipeline"}
+              className={"tabs__item" + (tab === "pipeline" ? " tabs__item--active" : "")}
+              onClick={() => setTab("pipeline")}
+              title="Canvas editor — hidden by default. Visible because ?canvas=1 is set."
+            >
+              Studio
+            </button>
+          )}
         </div>
         {tab === "pipeline" && (
           <>
@@ -437,8 +457,11 @@ export default function App() {
         </button>
         <span className="toolbar__title">Orka</span>
       </div>
-      {/* Both tabs stay mounted; hide the inactive one with `hidden` (display:none).
-          Keeps SessionDashboard state + ReactFlow instance alive across switches. */}
+      {/* All tabs stay mounted; hide the inactive ones with `hidden` (display:none).
+          Keeps SessionDashboard + SkillsTab state + ReactFlow instance alive across switches. */}
+      <div className="main" hidden={tab !== "skills"}>
+        <SkillsTab />
+      </div>
       <div className="main" hidden={tab !== "pipeline"}>
         <div className="sidebar">
           <PipelineLibrary
