@@ -13,41 +13,29 @@ type Props = {
    * for on-canvas outputs, or a run id for the Runs tab.
    */
   runId: string;
-
   /**
-   * Human-friendly title for the source of the output — used in dispatch
-   * destinations (e.g., Apple Notes title "Orka · weekly-audit").
+   * Human-friendly title for the source of the output — used as the Apple
+   * Notes note title, e.g. "Orka · agent n5".
    */
   sourceTitle?: string;
-
-  /**
-   * Hook for "❓ Ask Claude". Parent typically spawns a new chat node on
-   * the canvas near the source, pre-filled with block + annotation as
-   * context. Omit to hide the button.
-   */
-  onAskClaude?: (block: Block, annotation: string) => Promise<void> | void;
-
-  /**
-   * Hook for "💾 New skill". Parent handles the name prompt and calls the
-   * save_node_as_skill command. Omit to hide the button.
-   */
-  onMakeSkill?: (block: Block, annotation: string) => Promise<void> | void;
 };
 
 /**
- * Render a Claude output as a vertical list of annotatable BlockCards
- * with three dispatch actions on each:
- *   - 📝 Apple Notes (built-in; no parent context needed)
- *   - ❓ Ask Claude (requires parent handler)
- *   - 💾 New skill (requires parent handler)
+ * Render a Claude output as a vertical list of annotatable BlockCards.
+ *
+ * Default interaction is one-click: hover a block → 📝 → appended to
+ * Apple Notes immediately, no editor, no annotation. This covers the
+ * >80% daily-use case ("that paragraph is useful, keep it").
+ *
+ * Secondary interaction: click 💬 to open the note editor. Type a note,
+ * optionally click "Save to Notes with note" to dispatch block + note
+ * together. Notes persist per-output.
+ *
+ * Other dispatch destinations (Ask Claude, New skill) are intentionally
+ * omitted — they belong to the Walk-into-Session flow (Week 2) where
+ * follow-up chat naturally lives.
  */
-export function OutputAnnotator({
-  markdown,
-  runId,
-  sourceTitle,
-  onAskClaude,
-  onMakeSkill,
-}: Props) {
+export function OutputAnnotator({ markdown, runId, sourceTitle }: Props) {
   const blocks = useMemo(() => parseBlocks(markdown), [markdown]);
 
   const load = useAnnotations((s) => s.load);
@@ -81,20 +69,48 @@ export function OutputAnnotator({
     void remove(runId, block.idx);
   }
 
-  /** Save to Notes — compose block + annotation as markdown, convert to HTML, append. */
-  async function saveToNotes(block: Block, annotation: string) {
-    const title = sourceTitle ? `Orka · ${sourceTitle}` : "Orka · Inbox";
+  const noteTitle = sourceTitle ? `Orka · ${sourceTitle}` : "Orka · Inbox";
 
-    // Compose body: the block as a quote (for visual separation), then the
-    // user's note if any, with a source-line footer for provenance.
-    const bodyMd = composeDispatchBody(block, annotation, runId, sourceTitle);
-
+  /**
+   * One-click save — the primary default action on every block. Appends
+   * the raw block markdown to Apple Notes. No quote formatting, no
+   * provenance footer — this matches the "I'm just picking things to
+   * keep" mental model.
+   */
+  async function quickSave(block: Block) {
     try {
       const html = await invokeCmd<string>("markdown_to_html", {
-        markdown: bodyMd,
+        markdown: block.content,
       });
       await invokeCmd<string>("append_to_apple_note", {
-        title,
+        title: noteTitle,
+        htmlBody: html,
+      });
+    } catch (e) {
+      await alertDialog(`Save to Apple Notes failed: ${e}`);
+      throw e;
+    }
+  }
+
+  /**
+   * Full save with annotation — the secondary action, only accessible
+   * from inside the editor. Adds a quote + your note + a provenance
+   * footer so when you read the note later it's obvious where it came
+   * from and what you thought at the time.
+   */
+  async function saveWithNote(block: Block, annotation: string) {
+    const quoted = block.content
+      .split("\n")
+      .map((l) => `> ${l}`)
+      .join("\n");
+    const note = annotation.trim() ? `\n\n**Note:** ${annotation.trim()}` : "";
+    const footer = `\n\n---\n*From Orka · ${sourceTitle ?? runId} · ${new Date().toLocaleString()}*`;
+    const body = `${quoted}${note}${footer}`;
+
+    try {
+      const html = await invokeCmd<string>("markdown_to_html", { markdown: body });
+      await invokeCmd<string>("append_to_apple_note", {
+        title: noteTitle,
         htmlBody: html,
       });
     } catch (e) {
@@ -113,30 +129,10 @@ export function OutputAnnotator({
           onToggle={toggle}
           onSave={onSave}
           onDelete={onDelete}
-          onSaveToNotes={saveToNotes}
-          onAskClaude={onAskClaude}
-          onMakeSkill={onMakeSkill}
+          onQuickSave={quickSave}
+          onSaveToNotes={saveWithNote}
         />
       ))}
     </div>
   );
-}
-
-/** Compose the dispatch payload markdown. Shared across Save-to-Notes and
- *  (potentially) other destinations so the block quote + note layout is
- *  consistent. */
-export function composeDispatchBody(
-  block: Block,
-  annotation: string,
-  runId: string,
-  sourceTitle?: string,
-): string {
-  const source = sourceTitle ? `${sourceTitle} · ${runId}` : runId;
-  const quoted = block.content
-    .split("\n")
-    .map((l) => `> ${l}`)
-    .join("\n");
-  const note = annotation.trim() ? `\n\n**Note:** ${annotation.trim()}\n` : "";
-  const footer = `\n\n---\n*From Orka · ${source} · ${new Date().toLocaleString()}*`;
-  return `${quoted}${note}${footer}`;
 }

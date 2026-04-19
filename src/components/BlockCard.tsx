@@ -16,18 +16,18 @@ type Props = {
   /** Called when the user removes the annotation. */
   onDelete?: (block: Block) => void;
 
-  // ─── Dispatch actions ────────────────────────────────────────────────
-  // Each dispatch button is only rendered when its handler is provided.
-  // The annotation's current draft (may be unsaved) is passed along, so
-  // the user's in-progress note is always the context sent downstream.
-
-  /** Send block + annotation to Apple Notes. */
+  /**
+   * One-click quick save — no editor, no annotation. Primary hover action
+   * because "I want to keep this block" is by far the highest-frequency
+   * intent in daily use. Parent typically appends the raw block markdown
+   * to Apple Notes.
+   */
+  onQuickSave?: (block: Block) => Promise<void> | void;
+  /**
+   * Editor-mode save that also sends block + annotation to the
+   * destination. Shown inside the open editor, never on hover.
+   */
   onSaveToNotes?: (block: Block, annotation: string) => Promise<void> | void;
-  /** Open a new chat session (typically a new canvas node) with block +
-   *  annotation pre-filled as context. */
-  onAskClaude?: (block: Block, annotation: string) => Promise<void> | void;
-  /** Create a new SKILL.md seeded from this block + annotation. */
-  onMakeSkill?: (block: Block, annotation: string) => Promise<void> | void;
 };
 
 /**
@@ -49,13 +49,13 @@ function BlockCardImpl({
   onToggle,
   onSave,
   onDelete,
+  onQuickSave,
   onSaveToNotes,
-  onAskClaude,
-  onMakeSkill,
 }: Props) {
   const [hovered, setHovered] = useState(false);
   const [draft, setDraft] = useState(annotationText ?? "");
-  const [dispatching, setDispatching] = useState<null | "notes" | "ask" | "skill">(null);
+  const [quickState, setQuickState] = useState<"idle" | "saving" | "saved">("idle");
+  const [dispatching, setDispatching] = useState<null | "notes">(null);
   const textareaRef = useRef<HTMLTextAreaElement | null>(null);
 
   const hasAnnotation = !!annotationText && annotationText.trim().length > 0;
@@ -102,18 +102,42 @@ function BlockCardImpl({
       <div className="block-card__body">{renderBlockBody(block)}</div>
 
       {showIndicator && (
-        <button
-          type="button"
-          className={`block-card__indicator ${hasAnnotation ? "block-card__indicator--has" : ""}`}
-          title={active ? "Close" : hasAnnotation ? "Edit annotation" : "Annotate this block"}
-          onClick={(e) => {
-            e.stopPropagation();
-            if (active) commitIfChanged();
-            onToggle?.(block);
-          }}
-        >
-          💬
-        </button>
+        <div className="block-card__hover-actions">
+          {onQuickSave && !active && (
+            <button
+              type="button"
+              className={`block-card__quick-btn ${quickState === "saved" ? "block-card__quick-btn--saved" : ""}`}
+              title="Save this block to Apple Notes"
+              disabled={quickState === "saving"}
+              onClick={async (e) => {
+                e.stopPropagation();
+                if (quickState !== "idle") return;
+                setQuickState("saving");
+                try {
+                  await onQuickSave(block);
+                  setQuickState("saved");
+                  window.setTimeout(() => setQuickState("idle"), 1500);
+                } catch {
+                  setQuickState("idle");
+                }
+              }}
+            >
+              {quickState === "saving" ? "⏳" : quickState === "saved" ? "✓" : "📝"}
+            </button>
+          )}
+          <button
+            type="button"
+            className={`block-card__indicator ${hasAnnotation ? "block-card__indicator--has" : ""}`}
+            title={active ? "Close" : hasAnnotation ? "Edit note" : "Add a note"}
+            onClick={(e) => {
+              e.stopPropagation();
+              if (active) commitIfChanged();
+              onToggle?.(block);
+            }}
+          >
+            💬
+          </button>
+        </div>
       )}
 
       {active && (
@@ -180,70 +204,26 @@ function BlockCardImpl({
             </button>
           </div>
 
-          {(onSaveToNotes || onAskClaude || onMakeSkill) && (
+          {onSaveToNotes && (
             <div className="block-card__annot-dispatch">
-              <span className="block-card__annot-dispatch-label">Do something with this:</span>
-              {onSaveToNotes && (
-                <button
-                  type="button"
-                  className="block-card__dispatch-btn"
-                  disabled={dispatching !== null}
-                  onClick={async (e) => {
-                    e.preventDefault();
-                    commitIfChanged();
-                    setDispatching("notes");
-                    try {
-                      await onSaveToNotes(block, draft.trim());
-                    } finally {
-                      setDispatching(null);
-                    }
-                  }}
-                  title="Append this block + your note to Apple Notes"
-                >
-                  {dispatching === "notes" ? "⏳" : "📝"} Apple Notes
-                </button>
-              )}
-              {onAskClaude && (
-                <button
-                  type="button"
-                  className="block-card__dispatch-btn"
-                  disabled={dispatching !== null}
-                  onClick={async (e) => {
-                    e.preventDefault();
-                    commitIfChanged();
-                    setDispatching("ask");
-                    try {
-                      await onAskClaude(block, draft.trim());
-                    } finally {
-                      setDispatching(null);
-                      onToggle?.(block);
-                    }
-                  }}
-                  title="Open a new chat seeded with this block + your note"
-                >
-                  {dispatching === "ask" ? "⏳" : "❓"} Ask Claude
-                </button>
-              )}
-              {onMakeSkill && (
-                <button
-                  type="button"
-                  className="block-card__dispatch-btn"
-                  disabled={dispatching !== null}
-                  onClick={async (e) => {
-                    e.preventDefault();
-                    commitIfChanged();
-                    setDispatching("skill");
-                    try {
-                      await onMakeSkill(block, draft.trim());
-                    } finally {
-                      setDispatching(null);
-                    }
-                  }}
-                  title="Turn this into a reusable skill"
-                >
-                  {dispatching === "skill" ? "⏳" : "💾"} New skill
-                </button>
-              )}
+              <button
+                type="button"
+                className="block-card__dispatch-btn"
+                disabled={dispatching !== null}
+                onClick={async (e) => {
+                  e.preventDefault();
+                  commitIfChanged();
+                  setDispatching("notes");
+                  try {
+                    await onSaveToNotes(block, draft.trim());
+                  } finally {
+                    setDispatching(null);
+                  }
+                }}
+                title="Append this block and your note to Apple Notes"
+              >
+                {dispatching === "notes" ? "⏳ Saving…" : "📝 Save to Notes with note"}
+              </button>
             </div>
           )}
         </div>

@@ -2099,28 +2099,58 @@ html, body, #root { margin: 0; height: 100%; }
   padding-left: 10px;
 }
 
-.block-card__indicator {
+.block-card__hover-actions {
   position: absolute;
   top: 4px;
   right: 4px;
-  width: 22px;
+  display: flex;
+  gap: 4px;
+}
+
+.block-card__quick-btn,
+.block-card__indicator {
+  width: 24px;
   height: 22px;
   padding: 0;
   border: none;
   border-radius: 4px;
-  background: rgba(255, 255, 255, 0.06);
-  color: #a8b0bf;
   font-size: 12px;
   cursor: pointer;
   display: flex;
   align-items: center;
   justify-content: center;
+  transition: opacity 0.15s ease, background 0.15s ease, transform 0.1s ease;
+}
+.block-card__quick-btn {
+  background: rgba(59, 130, 246, 0.22);
+  color: #93c5fd;
+  opacity: 0.9;
+}
+.block-card__quick-btn:hover:not(:disabled) {
+  background: rgba(59, 130, 246, 0.4);
+  color: #fff;
+  opacity: 1;
+}
+.block-card__quick-btn:active:not(:disabled) {
+  transform: scale(0.94);
+}
+.block-card__quick-btn:disabled {
+  cursor: not-allowed;
+}
+.block-card__quick-btn--saved {
+  background: #1b7f4c;
+  color: #fff;
+  opacity: 1;
+}
+
+.block-card__indicator {
+  background: rgba(255, 255, 255, 0.06);
+  color: #a8b0bf;
   opacity: 0.7;
-  transition: opacity 0.15s ease, background 0.15s ease;
 }
 .block-card__indicator:hover {
   opacity: 1;
-  background: rgba(96, 165, 250, 0.18);
+  background: rgba(255, 255, 255, 0.12);
 }
 .block-card__indicator--has {
   opacity: 1;
