@@ -390,7 +390,7 @@ export default function App() {
             className={"tabs__item" + (tab === "monitor" ? " tabs__item--active" : "")}
             onClick={() => setTab("monitor")}
           >
-            Live
+            Sessions
           </button>
           <button
             role="tab"

@@ -1,4 +1,5 @@
 mod annotations;
+mod session_brief;
 mod dest_profiles;
 mod destinations;
 mod graph;
@@ -1054,6 +1055,9 @@ pub fn run() {
             annotations::save_annotation,
             annotations::append_message,
             annotations::delete_annotation,
+            session_brief::get_session_brief,
+            session_brief::generate_session_brief,
+            session_brief::clear_session_brief,
             dest_profiles::list_destination_profiles,
             dest_profiles::save_destination_profile,
             dest_profiles::delete_destination_profile,

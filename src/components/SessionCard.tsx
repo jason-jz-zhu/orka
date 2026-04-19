@@ -3,6 +3,7 @@ import type { SessionInfo } from "../lib/session-types";
 import { invokeCmd } from "../lib/tauri";
 import { alertDialog } from "../lib/dialogs";
 import { bump } from "../lib/perf";
+import { SessionBriefCard } from "./SessionBriefCard";
 
 export type CardState = "generating" | "for-review" | "reviewed" | "errored" | "idle";
 
@@ -110,6 +111,9 @@ function SessionCardImpl({
         <span className="session-card__label">💬</span>
         <span className="session-card__ask-text">{ask}</span>
       </div>
+
+      <SessionBriefCard sessionId={session.id} sessionPath={session.path} compact />
+
 
       {now && (
         <div className="session-card__now" title={now}>
