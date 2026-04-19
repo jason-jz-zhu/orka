@@ -116,11 +116,15 @@ function SessionCardImpl({
         sessionId={session.id}
         sessionPath={session.path}
         compact
-        // Auto-generate for sessions touched in the last 7 days. Older
-        // ones keep the manual button — they're unlikely to be revisited,
-        // and generating them on every app start would waste claude -p
-        // calls.
-        autoGenerate={Date.now() - session.modified_ms < 7 * 24 * 60 * 60 * 1000}
+        // Auto-generate only when the session is settled:
+        //  - touched in the last 7 days (unlikely to revisit older)
+        //  - NOT currently live / mid-stream (brief would be stale
+        //    the moment Claude adds the next message)
+        // Users can always click the ✨ Brief me button manually.
+        autoGenerate={
+          Date.now() - session.modified_ms < 7 * 24 * 60 * 60 * 1000 &&
+          session.status !== "live"
+        }
       />
 
 

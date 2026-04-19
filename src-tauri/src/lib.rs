@@ -1059,6 +1059,7 @@ pub fn run() {
             session_brief::get_session_brief,
             session_brief::generate_session_brief,
             session_brief::clear_session_brief,
+            session_brief::cleanup_ghost_brief_sessions,
             trusted_taps::list_trusted_taps,
             trusted_taps::install_tap,
             trusted_taps::uninstall_tap,

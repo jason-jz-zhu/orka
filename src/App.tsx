@@ -369,6 +369,25 @@ export default function App() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
+  // One-shot cleanup of ghost brief sessions on app start. Prior builds
+  // of session brief generation didn't use --no-session-persistence, so
+  // every brief call wrote a polluting "You are summarizing…" session
+  // into ~/.claude/projects/. This scan is surgically narrow — only
+  // files whose first user message contains the exact brief preamble
+  // get deleted — so it's safe to run unconditionally.
+  useEffect(() => {
+    (async () => {
+      try {
+        const removed = await invokeCmd<number>("cleanup_ghost_brief_sessions");
+        if (removed > 0) {
+          console.log(`[orka] cleaned up ${removed} ghost brief session file(s)`);
+        }
+      } catch (e) {
+        console.warn("[orka] ghost cleanup failed:", e);
+      }
+    })();
+  }, []);
+
 
   return (
     <div className="app">

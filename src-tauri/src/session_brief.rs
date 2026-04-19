@@ -162,6 +162,67 @@ pub async fn clear_session_brief(session_id: String) -> Result<(), String> {
     save_store(&store).await
 }
 
+/// One-shot cleanup: delete any Claude Code session files in
+/// `~/.claude/projects/*/` whose first user message starts with the
+/// signature preamble Orka uses for brief-generation prompts. These are
+/// ghost sessions created before `--no-session-persistence` was added.
+///
+/// Returns the number of files removed. Safe to call repeatedly; it
+/// no-ops when clean.
+#[tauri::command]
+pub async fn cleanup_ghost_brief_sessions() -> Result<u32, String> {
+    let Some(home) = dirs::home_dir() else { return Err("no home dir".into()) };
+    let projects_root = home.join(".claude").join("projects");
+    if !projects_root.is_dir() {
+        return Ok(0);
+    }
+
+    const SIGNATURE: &str = "You are summarizing a Claude Code session";
+    let mut removed = 0u32;
+
+    let Ok(projects) = std::fs::read_dir(&projects_root) else { return Ok(0) };
+    for project in projects.flatten() {
+        let project_path = project.path();
+        if !project_path.is_dir() { continue; }
+        let Ok(sessions) = std::fs::read_dir(&project_path) else { continue };
+        for session in sessions.flatten() {
+            let path = session.path();
+            if !path.is_file() { continue; }
+            if path.extension().and_then(|e| e.to_str()) != Some("jsonl") { continue; }
+
+            if is_ghost_brief_session(&path, SIGNATURE) {
+                if std::fs::remove_file(&path).is_ok() {
+                    removed += 1;
+                }
+            }
+        }
+    }
+    Ok(removed)
+}
+
+/// Check whether a JSONL session file is a ghost brief session by peeking
+/// at its first user message. Only reads the first ~8KB so it's cheap
+/// even if the file grew.
+fn is_ghost_brief_session(path: &Path, signature: &str) -> bool {
+    use std::io::{BufRead, BufReader, Read};
+    let Ok(f) = std::fs::File::open(path) else { return false };
+    // Cap at 8KB — ghost briefs put their preamble in line 1, so we don't
+    // need to scan far.
+    let reader = BufReader::new(f.take(8192));
+    for line in reader.lines().map_while(Result::ok).take(50) {
+        let Ok(v) = serde_json::from_str::<serde_json::Value>(&line) else { continue };
+        if v.get("type").and_then(|t| t.as_str()) != Some("user") {
+            continue;
+        }
+        let Some(content) = v.get("message").and_then(|m| m.get("content")) else {
+            continue;
+        };
+        let text = extract_text_from_content(content);
+        return text.contains(signature);
+    }
+    false
+}
+
 // ───────── internals ──────────────────────────────────────────────────
 
 /// Read the last `max_lines` non-blank JSONL lines and render them as a
@@ -279,8 +340,14 @@ Keep each value under 100 characters. Use second-person phrasing (\"You were deb
 }
 
 async fn call_claude_print(prompt: &str) -> Result<String, String> {
+    // `--no-session-persistence` is critical here: without it, every brief
+    // generation would itself be written to `~/.claude/projects/` as a new
+    // session. Orka would then see those briefs as real sessions and try
+    // to auto-brief THEM — infinite pollution. This flag is why `claude -p`
+    // has a "print mode" distinct from REPL mode.
     let output = tokio::process::Command::new("claude")
         .arg("-p")
+        .arg("--no-session-persistence")
         .arg(prompt)
         .output()
         .await
