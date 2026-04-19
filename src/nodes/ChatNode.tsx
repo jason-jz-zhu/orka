@@ -11,9 +11,44 @@ import {
   computeAllowedTools,
   toolModeLabel,
 } from "../lib/graph-store";
-import { alertDialog } from "../lib/dialogs";
+import { alertDialog, promptDialog } from "../lib/dialogs";
 import { waitForDone } from "../lib/run-all";
 import { OutputAnnotator } from "../components/OutputAnnotator";
+import type { Block } from "../lib/markdown-blocks";
+
+/** Build a follow-up prompt that gives Claude the original block as quoted
+ *  context plus the user's annotation. Leaves a clear space for the user
+ *  to add a question. */
+function composeFollowUpPrompt(block: Block, annotation: string, srcId: string, variant: "chat" | "agent"): string {
+  const quoted = block.content
+    .split("\n")
+    .map((l) => `> ${l}`)
+    .join("\n");
+  const noteSection = annotation.trim()
+    ? `\n\n**My note:** ${annotation.trim()}`
+    : "";
+  return (
+    `About this from ${variant} ${srcId}:\n\n${quoted}${noteSection}\n\n` +
+    `[Add your follow-up question here and hit Run]`
+  );
+}
+
+/** Build the prompt body for a new skill seeded from a block + annotation.
+ *  Treats the block as the input the skill should operate on, and the
+ *  annotation as guidance for what the skill should do. */
+function composeSkillPrompt(block: Block, annotation: string): string {
+  const quoted = block.content
+    .split("\n")
+    .map((l) => `> ${l}`)
+    .join("\n");
+  const guidance = annotation.trim()
+    ? `Guidance from the author: ${annotation.trim()}\n\n`
+    : "";
+  return (
+    `${guidance}Operate on this example input:\n\n${quoted}\n\n` +
+    `Describe what this skill should do when invoked, then perform it.`
+  );
+}
 
 
 type Props = NodeProps<Extract<OrkaNode, { type: "chat" | "agent" }>> & {
@@ -152,6 +187,62 @@ export default function ChatNode({ id, data, variant = "chat" }: Props) {
         output: `Error: ${String(e)}`,
         running: false,
       });
+    }
+  }
+
+  /** Dispatch: spawn a new chat node near this one, pre-filled with the
+   *  selected block + user annotation as context. The user can then edit
+   *  and run it. Does NOT auto-run — the point is to let the user refine
+   *  the follow-up question first. */
+  async function handleAskClaude(block: Block, annotation: string) {
+    const addChatNode = useGraph.getState().addChatNode;
+    const composed = composeFollowUpPrompt(block, annotation, id, variant);
+    const newId = addChatNode({ prompt: composed });
+    // Position the new node slightly to the right of this node so it's
+    // visible without requiring the user to pan.
+    const store = useGraph.getState();
+    const self = store.nodes.find((n) => n.id === id);
+    const newNode = store.nodes.find((n) => n.id === newId);
+    if (self && newNode) {
+      store.onNodesChange([
+        {
+          id: newId,
+          type: "position",
+          position: { x: self.position.x + 440, y: self.position.y + 40 },
+        },
+      ]);
+    }
+    // Optionally draw an edge from self → new node so the lineage is
+    // visible. Using onConnect keeps the DAG store consistent.
+    store.onConnect({ source: id, target: newId, sourceHandle: null, targetHandle: null });
+  }
+
+  /** Dispatch: create a reusable skill seeded from this block + annotation.
+   *  Prompts the user for a name, then writes a SKILL.md via the existing
+   *  save_node_as_skill command. */
+  async function handleMakeSkill(block: Block, annotation: string) {
+    const name = await promptDialog("Name for the new skill?", {
+      default: "my-skill",
+      title: "Make a skill",
+    });
+    if (!name) return;
+
+    const fakeNode = {
+      type: "agent",
+      data: {
+        prompt: composeSkillPrompt(block, annotation),
+      },
+    };
+
+    try {
+      const path = await invokeCmd<string>("save_node_as_skill", {
+        nodeJson: JSON.stringify(fakeNode),
+        name,
+        targetDir: "~/.claude/skills",
+      });
+      await alertDialog(`Created skill at ${path}`);
+    } catch (e) {
+      await alertDialog(`Make skill failed: ${e}`);
     }
   }
 
@@ -297,7 +388,13 @@ export default function ChatNode({ id, data, variant = "chat" }: Props) {
           }
           onWheelCapture={(e) => e.stopPropagation()}
         >
-          <OutputAnnotator markdown={data.output} runId={id} />
+          <OutputAnnotator
+            markdown={data.output}
+            runId={id}
+            sourceTitle={`${variant} ${id}`}
+            onAskClaude={handleAskClaude}
+            onMakeSkill={handleMakeSkill}
+          />
           {data.output.length > 200 && (
             <button
               className="chat-node__output-toggle"

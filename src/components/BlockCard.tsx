@@ -15,6 +15,19 @@ type Props = {
   onSave?: (block: Block, text: string) => void;
   /** Called when the user removes the annotation. */
   onDelete?: (block: Block) => void;
+
+  // ─── Dispatch actions ────────────────────────────────────────────────
+  // Each dispatch button is only rendered when its handler is provided.
+  // The annotation's current draft (may be unsaved) is passed along, so
+  // the user's in-progress note is always the context sent downstream.
+
+  /** Send block + annotation to Apple Notes. */
+  onSaveToNotes?: (block: Block, annotation: string) => Promise<void> | void;
+  /** Open a new chat session (typically a new canvas node) with block +
+   *  annotation pre-filled as context. */
+  onAskClaude?: (block: Block, annotation: string) => Promise<void> | void;
+  /** Create a new SKILL.md seeded from this block + annotation. */
+  onMakeSkill?: (block: Block, annotation: string) => Promise<void> | void;
 };
 
 /**
@@ -36,9 +49,13 @@ function BlockCardImpl({
   onToggle,
   onSave,
   onDelete,
+  onSaveToNotes,
+  onAskClaude,
+  onMakeSkill,
 }: Props) {
   const [hovered, setHovered] = useState(false);
   const [draft, setDraft] = useState(annotationText ?? "");
+  const [dispatching, setDispatching] = useState<null | "notes" | "ask" | "skill">(null);
   const textareaRef = useRef<HTMLTextAreaElement | null>(null);
 
   const hasAnnotation = !!annotationText && annotationText.trim().length > 0;
@@ -162,6 +179,73 @@ function BlockCardImpl({
               Save
             </button>
           </div>
+
+          {(onSaveToNotes || onAskClaude || onMakeSkill) && (
+            <div className="block-card__annot-dispatch">
+              <span className="block-card__annot-dispatch-label">Do something with this:</span>
+              {onSaveToNotes && (
+                <button
+                  type="button"
+                  className="block-card__dispatch-btn"
+                  disabled={dispatching !== null}
+                  onClick={async (e) => {
+                    e.preventDefault();
+                    commitIfChanged();
+                    setDispatching("notes");
+                    try {
+                      await onSaveToNotes(block, draft.trim());
+                    } finally {
+                      setDispatching(null);
+                    }
+                  }}
+                  title="Append this block + your note to Apple Notes"
+                >
+                  {dispatching === "notes" ? "⏳" : "📝"} Apple Notes
+                </button>
+              )}
+              {onAskClaude && (
+                <button
+                  type="button"
+                  className="block-card__dispatch-btn"
+                  disabled={dispatching !== null}
+                  onClick={async (e) => {
+                    e.preventDefault();
+                    commitIfChanged();
+                    setDispatching("ask");
+                    try {
+                      await onAskClaude(block, draft.trim());
+                    } finally {
+                      setDispatching(null);
+                      onToggle?.(block);
+                    }
+                  }}
+                  title="Open a new chat seeded with this block + your note"
+                >
+                  {dispatching === "ask" ? "⏳" : "❓"} Ask Claude
+                </button>
+              )}
+              {onMakeSkill && (
+                <button
+                  type="button"
+                  className="block-card__dispatch-btn"
+                  disabled={dispatching !== null}
+                  onClick={async (e) => {
+                    e.preventDefault();
+                    commitIfChanged();
+                    setDispatching("skill");
+                    try {
+                      await onMakeSkill(block, draft.trim());
+                    } finally {
+                      setDispatching(null);
+                    }
+                  }}
+                  title="Turn this into a reusable skill"
+                >
+                  {dispatching === "skill" ? "⏳" : "💾"} New skill
+                </button>
+              )}
+            </div>
+          )}
         </div>
       )}
     </div>
