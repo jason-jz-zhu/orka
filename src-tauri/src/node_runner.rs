@@ -114,6 +114,9 @@ pub async fn spawn_claude_stream(
     track_id: Option<&str>,
 ) -> Result<String, String> {
     let args = claude_args(prompt, mode, resume_id, add_dirs, scope);
+    // Gate: cap total concurrent `claude` subprocesses across the app.
+    // Held until this function returns (after the child exits).
+    let _permit = crate::claude_gate::acquire().await;
     let mut cmd = Command::new("claude");
     cmd.current_dir(workdir)
         .args(&args)
@@ -196,12 +199,65 @@ pub async fn run_claude(
     resume_id: Option<String>,
     add_dirs: Vec<String>,
     scope: ToolScope,
+    workdir_key: Option<String>,
+    skill_slug: Option<String>,
+    schedule_label: Option<String>,
+    inputs_for_template: Option<Vec<String>>,
+    explicit_workdir: Option<String>,
 ) -> Result<(), String> {
-    let workdir = workspace::ensure_node_dir(&id)
-        .await
-        .map_err(|e| format!("mkdir failed: {e}"))?;
+    // Workdir resolution order:
+    //   1. `skill_slug` + user config → <user_folder>/<timestamped>/
+    //   2. `workdir_key` → reuse another run's node dir (for --resume chaining)
+    //   3. `id` → per-run node dir under the workspace (legacy default)
+    //
+    // The user-folder path lets skill outputs land somewhere the user
+    // can find with Finder/Spotlight. The `workdir_key` path matters
+    // for `--resume <session>`: claude derives its project folder from
+    // the cwd, and session files only live under the project that
+    // created them. A "continue chat" spawn uses a unique `id` for
+    // event isolation but must share the workdir of the source run
+    // or --resume reports "No conversation found".
+    let workdir = if let Some(w) = explicit_workdir.as_deref() {
+        // Frontend already resolved the workdir via `preview_run_workdir`
+        // at user-click time. Re-resolving here would pick up a later
+        // `chrono::Local::now()` — different minute bucket when the
+        // subprocess actually starts after any modal / trust check
+        // delay — and the path written to the run record would no
+        // longer match the directory we actually run in. Accept the
+        // caller's path verbatim and just mkdir it.
+        let p = std::path::PathBuf::from(w);
+        tokio::fs::create_dir_all(&p)
+            .await
+            .map_err(|e| format!("mkdir explicit workdir failed: {e}"))?;
+        p
+    } else if skill_slug.is_some() {
+        let inputs = inputs_for_template.unwrap_or_default();
+        let resolved = crate::skill_workdir::resolve_run_workdir(
+            skill_slug.as_deref(),
+            schedule_label.as_deref(),
+            &id,
+            &inputs,
+            chrono::Local::now(),
+        );
+        tokio::fs::create_dir_all(&resolved)
+            .await
+            .map_err(|e| format!("mkdir resolved workdir failed: {e}"))?;
+        resolved
+    } else {
+        let dir_key = workdir_key.as_deref().unwrap_or(&id);
+        workspace::ensure_node_dir(dir_key)
+            .await
+            .map_err(|e| format!("mkdir failed: {e}"))?
+    };
 
-    let _ = tokio::fs::write(workdir.join("prompt.txt"), &prompt).await;
+    // Internal per-run files (prompt.txt, any future stream dumps) live
+    // under .orka/ so a directory listing of the user-configured folder
+    // only shows the artifacts they care about (markdown, generated
+    // files, etc). Legacy node_dir fallback gets the same treatment so
+    // the layout is consistent regardless of where the run landed.
+    let internal = crate::skill_workdir::internal_dir(&workdir);
+    let _ = tokio::fs::create_dir_all(&internal).await;
+    let _ = tokio::fs::write(internal.join("prompt.txt"), &prompt).await;
 
     let stream_event = format!("node:{id}:stream");
     let done_event = format!("node:{id}:done");
@@ -209,10 +265,22 @@ pub async fn run_claude(
     let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel::<String>();
     let app_fwd = app.clone();
     let stream_event_fwd = stream_event.clone();
+    // Forwarder owns its own String — no Arc<Mutex> contention per
+    // stream line. At 100-300 tokens/sec the previous Mutex version
+    // did 30k `.lock().await`s per long run, serializing on a single
+    // lock for no reason (this task is the sole writer). Now the
+    // accumulator lives in the forwarder's stack and is returned via
+    // the JoinHandle when the stream closes.
     let forwarder = tauri::async_runtime::spawn(async move {
+        let mut buf = String::new();
         while let Some(line) = rx.recv().await {
+            let extracted = extract_assistant_text(&line);
+            if !extracted.is_empty() {
+                buf.push_str(&extracted);
+            }
             let _ = app_fwd.emit(&stream_event_fwd, line);
         }
+        buf
     });
 
     let result = spawn_claude_stream(
@@ -226,8 +294,37 @@ pub async fn run_claude(
         Some(&id),
     )
     .await;
-    let _ = forwarder.await;
+    // Await the forwarder and take ownership of its accumulated text.
+    // Falling back to an empty string on join-error is safe — output.md
+    // just won't be written that run, which is also what happens when
+    // the skill emits no text at all.
+    let final_text = forwarder.await.unwrap_or_default();
     running_lock().remove(&id);
+
+    // Kick the write into a detached task so the spin-disk fsync
+    // (10-50ms on HDD) doesn't delay the UI's "run complete" signal.
+    // The frontend only reads output.md when the user opens
+    // RunDetailDrawer — by then the write is long done. Kernel page
+    // cache gives read-after-write consistency even without fsync,
+    // so the only thing we lose is durability across a kernel crash
+    // in the few-ms window — acceptable for a derived artifact.
+    if !final_text.trim().is_empty() {
+        let output_path = workdir.join("output.md");
+        let text = final_text;
+        tauri::async_runtime::spawn(async move {
+            if let Ok(mut f) = tokio::fs::OpenOptions::new()
+                .create(true)
+                .write(true)
+                .truncate(true)
+                .open(&output_path)
+                .await
+            {
+                use tokio::io::AsyncWriteExt;
+                let _ = f.write_all(text.as_bytes()).await;
+                let _ = f.sync_all().await;
+            }
+        });
+    }
 
     match result {
         Ok(_stderr) => {
@@ -244,9 +341,69 @@ pub async fn run_claude(
     }
 }
 
-/// Send SIGTERM to a running node's entire process group. No-op if not running.
-/// Using the negative pid targets the group (set up via setsid in spawn_claude_stream),
-/// so child helpers (node, ripgrep, python, etc.) get killed too — no zombies.
+/// Extract assistant text content from a single stream-json line and
+/// append it to the shared buffer. Silently tolerates any non-matching
+/// line (tool_use, tool_result, system, result, etc.) — those don't
+/// contribute to the user-visible output artifact.
+///
+/// Only used by tests — the prod path replaced this Arc<Mutex> flow
+/// with a local String owned by the forwarder task, eliminating
+/// per-event async lock acquisition.
+#[cfg(test)]
+async fn append_text_from_stream_line(
+    line: &str,
+    buf: &std::sync::Arc<tokio::sync::Mutex<String>>,
+) {
+    let extracted = extract_assistant_text(line);
+    if extracted.is_empty() {
+        return;
+    }
+    let mut g = buf.lock().await;
+    if !g.is_empty() {
+        g.push_str("");
+    }
+    g.push_str(&extracted);
+}
+
+/// Pure parser: returns concatenated assistant text blocks from one
+/// stream-json line. Exposed for tests so we don't need a running
+/// subprocess to assert behaviour.
+pub fn extract_assistant_text(line: &str) -> String {
+    let Ok(v) = serde_json::from_str::<serde_json::Value>(line) else {
+        return String::new();
+    };
+    if v.get("type").and_then(|t| t.as_str()) != Some("assistant") {
+        return String::new();
+    }
+    let Some(blocks) = v
+        .get("message")
+        .and_then(|m| m.get("content"))
+        .and_then(|c| c.as_array())
+    else {
+        return String::new();
+    };
+    let mut out = String::new();
+    for block in blocks {
+        if block.get("type").and_then(|t| t.as_str()) != Some("text") {
+            continue;
+        }
+        if let Some(text) = block.get("text").and_then(|t| t.as_str()) {
+            out.push_str(text);
+        }
+    }
+    out
+}
+
+/// Send SIGTERM to a running node's entire process group, then SIGKILL
+/// after a 5s grace window if the tree hasn't exited. No-op if not
+/// running. Using the negative pid targets the group (set up via
+/// setsid in spawn_claude_stream), so child helpers (node, ripgrep,
+/// python, etc.) get killed too — no zombies.
+///
+/// The SIGKILL escalation matters for claude builds that ignore
+/// SIGTERM while in the middle of a tool use, or for stuck child
+/// processes (network hangs). Without it cancel_node returned true
+/// but the process would linger forever.
 pub fn cancel_node(node_id: &str) -> bool {
     let pid = match running_lock().remove(node_id) {
         Some(p) => p,
@@ -254,14 +411,43 @@ pub fn cancel_node(node_id: &str) -> bool {
     };
     #[cfg(unix)]
     unsafe {
-        // Signal the whole process group led by `pid`.
+        // SIGTERM the whole group first — well-behaved children clean
+        // up (claude flushes session state, closes pipes, etc.).
         libc::kill(-(pid as i32), libc::SIGTERM);
+
+        // Detached escalation: give the tree ~5s, then SIGKILL if
+        // anything's still alive. Using a blocking thread rather than
+        // tokio::spawn because this function is sync (called from a
+        // Tauri command). The signal is idempotent — kill(0) returns
+        // -1 if the process is gone, so no harm done.
+        std::thread::spawn(move || {
+            std::thread::sleep(std::time::Duration::from_secs(5));
+            // Check if the group leader is still alive before SIGKILL —
+            // avoid sending a signal to a PID the OS has since reused.
+            if libc::kill(pid as i32, 0) == 0 {
+                libc::kill(-(pid as i32), libc::SIGKILL);
+            }
+        });
     }
     #[cfg(not(unix))]
     {
         let _ = pid;
     }
     true
+}
+
+/// Terminate every tracked run. Used at app shutdown so users don't
+/// orphan claude processes when they quit mid-run. Iterates a
+/// snapshot of the RUNNING map to avoid holding the lock while
+/// sending signals.
+pub fn cancel_all_nodes() {
+    let snapshot: Vec<String> = {
+        let g = running_lock();
+        g.keys().cloned().collect()
+    };
+    for id in snapshot {
+        cancel_node(&id);
+    }
 }
 
 #[cfg(test)]
@@ -392,5 +578,72 @@ mod tests {
             "no result line in stream: {:?}",
             lines
         );
+    }
+
+    #[test]
+    fn harness_extract_assistant_text_basic() {
+        let line = r#"{"type":"assistant","message":{"content":[{"type":"text","text":"Hello world"}]}}"#;
+        assert_eq!(extract_assistant_text(line), "Hello world");
+    }
+
+    #[test]
+    fn harness_extract_assistant_text_concatenates_multiple_blocks() {
+        // A single stream line can carry multiple text blocks — combine
+        // them in emit order so the captured output mirrors what the
+        // user saw streaming in the UI.
+        let line = r#"{"type":"assistant","message":{"content":[{"type":"text","text":"A"},{"type":"text","text":"B"}]}}"#;
+        assert_eq!(extract_assistant_text(line), "AB");
+    }
+
+    #[test]
+    fn harness_extract_assistant_text_ignores_tool_use() {
+        let line = r#"{"type":"assistant","message":{"content":[{"type":"text","text":"hello"},{"type":"tool_use","name":"Read","input":{}}]}}"#;
+        assert_eq!(extract_assistant_text(line), "hello");
+    }
+
+    #[test]
+    fn harness_extract_assistant_text_ignores_non_assistant() {
+        // user / tool_result / system / result messages don't count.
+        assert_eq!(
+            extract_assistant_text(r#"{"type":"user","message":{"content":"nope"}}"#),
+            ""
+        );
+        assert_eq!(
+            extract_assistant_text(r#"{"type":"result","subtype":"success"}"#),
+            ""
+        );
+        assert_eq!(
+            extract_assistant_text(r#"{"type":"system","subtype":"init"}"#),
+            ""
+        );
+    }
+
+    #[test]
+    fn harness_extract_assistant_text_tolerates_garbage() {
+        // Malformed JSON or unexpected shapes never panic — just yield empty.
+        assert_eq!(extract_assistant_text(""), "");
+        assert_eq!(extract_assistant_text("not json"), "");
+        assert_eq!(extract_assistant_text("{}"), "");
+        assert_eq!(
+            extract_assistant_text(r#"{"type":"assistant"}"#),
+            ""
+        );
+    }
+
+    #[tokio::test]
+    async fn harness_append_text_from_stream_line_accumulates() {
+        let buf = std::sync::Arc::new(tokio::sync::Mutex::new(String::new()));
+
+        let mixed_lines = vec![
+            r#"{"type":"system","subtype":"init"}"#,
+            r#"{"type":"assistant","message":{"content":[{"type":"text","text":"Part 1"}]}}"#,
+            r#"{"type":"user","message":{"content":"ignored"}}"#,
+            r#"{"type":"assistant","message":{"content":[{"type":"text","text":"Part 2"}]}}"#,
+        ];
+        for line in mixed_lines {
+            append_text_from_stream_line(line, &buf).await;
+        }
+        let g = buf.lock().await;
+        assert_eq!(*g, "Part 1Part 2");
     }
 }

@@ -11,6 +11,14 @@ export type RunRecord = {
   status: string;
   trigger: string;
   error_message?: string;
+  /** Claude session id produced by this run. Runs Dashboard uses this
+   *  to render each row as a link that jumps to the Sessions tab with
+   *  that session pre-selected. Optional — historic rows lack it. */
+  session_id?: string;
+  /** Resolved working directory this run used. Drives the "📄 Open"
+   *  button that reveals the folder in Finder. Optional for legacy
+   *  rows written before this field existed. */
+  workdir?: string;
 };
 
 type RunsState = {
