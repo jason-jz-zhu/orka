@@ -199,6 +199,7 @@ pub async fn apply_skill_evolution(
     tokio::fs::rename(&tmp, &path)
         .await
         .map_err(|e| format!("rename: {e}"))?;
+    crate::skills::invalidate_skills_cache();
     Ok(backup.to_string_lossy().into_owned())
 }
 
@@ -206,6 +207,7 @@ pub async fn apply_skill_evolution(
 
 async fn call_claude_print(prompt: &str) -> Result<String, String> {
     let model = crate::model_config::model_for_evolution();
+    let _permit = crate::claude_gate::acquire().await;
     let output = tokio::process::Command::new("claude")
         .arg("-p")
         .arg("--no-session-persistence")

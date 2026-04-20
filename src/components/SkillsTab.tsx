@@ -1,7 +1,31 @@
-import { useEffect, useState } from "react";
+import { useDeferredValue, useEffect, useMemo, useRef, useState } from "react";
 import { useSkills, initSkillsWatcher, type SkillMeta } from "../lib/skills";
 import { SkillRunner } from "./SkillRunner";
 import { TrustedTapsSection } from "./TrustedTapsSection";
+import { invokeCmd, listenEvent } from "../lib/tauri";
+import { alertDialog, confirmDialog, promptDialog } from "../lib/dialogs";
+import { open as openDialog } from "@tauri-apps/plugin-dialog";
+
+type PrewarmProgress = {
+  current: number;
+  total: number;
+  slug: string;
+  status: "start" | "ok" | "err" | "skipped";
+  error: string | null;
+};
+
+type PrewarmSummary = {
+  total: number;
+  succeeded: number;
+  failed: number;
+  skipped: number;
+  results: Array<{
+    slug: string;
+    status: string;
+    error: string | null;
+    examples: string[] | null;
+  }>;
+};
 
 /** Known tap-id prefixes — these come from the trusted_taps backend and
  *  indicate the skill was installed via a tap (gstack, etc). Slugs of
@@ -9,11 +33,36 @@ import { TrustedTapsSection } from "./TrustedTapsSection";
  *  stripped into a badge so the list stays readable. */
 const KNOWN_TAP_PREFIXES = ["gstack"];
 
+/** Slugs of Orka-shipped meta-skills — tools that build or manage
+ *  other skills. They're pinned to the top of the sidebar, visually
+ *  distinguished with a "built-in" badge, and can't be deleted from
+ *  the UI (users who really want to remove them can rm the folder).
+ *  Hard-coded for now; if the list grows, migrate to a SKILL.md
+ *  frontmatter flag (`orka.system: true`). */
+const META_SKILL_SLUGS = new Set(["orka-skill-builder"]);
+
+function isMetaSkill(slug: string): boolean {
+  return META_SKILL_SLUGS.has(slug);
+}
+
 function extractTapPrefix(slug: string): string | null {
   for (const p of KNOWN_TAP_PREFIXES) {
     if (slug.startsWith(`${p}-`)) return p;
   }
   return null;
+}
+
+/** First sentence of the description, capped at 70 chars. Skill authors
+ *  tend to pack examples / trigger phrases into `description:` — shown
+ *  in full this wraps to 3+ lines per card and drowns the list. */
+function firstSentence(text: string): string {
+  const trimmed = text.trim();
+  // Prefer the first sentence-ending punctuation within the first 120
+  // chars. Falls back to a hard clamp.
+  const head = trimmed.slice(0, 140);
+  const m = head.match(/^(.*?[.!?。！？])\s/);
+  const candidate = m ? m[1] : head;
+  return candidate.length > 70 ? candidate.slice(0, 68).trimEnd() + "…" : candidate;
 }
 
 type SkillsTabProps = {
@@ -42,32 +91,296 @@ export function SkillsTab({ onOpenInCanvas }: SkillsTabProps = {}) {
     initSkillsWatcher();
   }, []);
 
-  const normFilter = filter.trim().toLowerCase();
-  const filtered = normFilter
-    ? skills.filter(
-        (s) =>
-          s.slug.toLowerCase().includes(normFilter) ||
-          s.description.toLowerCase().includes(normFilter),
-      )
-    : skills;
+  const deferredFilter = useDeferredValue(filter);
+  const filtered = useMemo(() => {
+    const normFilter = deferredFilter.trim().toLowerCase();
+    const base = !normFilter
+      ? skills
+      : skills.filter(
+          (s) =>
+            s.slug.toLowerCase().includes(normFilter) ||
+            s.description.toLowerCase().includes(normFilter),
+        );
+    // Pin meta-skills (built-in tools that produce other skills) to the
+    // top. They're not user-authored content; mixing them with real
+    // skills used to confuse new users who'd try to schedule / evolve
+    // a tool rather than a task. Stable sort preserves the backend's
+    // intra-group order for normal skills.
+    return [...base].sort((a, b) => {
+      const am = isMetaSkill(a.slug) ? 0 : 1;
+      const bm = isMetaSkill(b.slug) ? 0 : 1;
+      return am - bm;
+    });
+  }, [skills, deferredFilter]);
 
   const selected: SkillMeta | null =
     skills.find((s) => s.slug === selectedSlug) ?? null;
+
+  // How many of the loaded skills ship without example prompts. Drives
+  // the batch prewarm banner in the sidebar header.
+  const missingExamplesCount = useMemo(
+    () => skills.filter((s) => !s.examples || s.examples.length === 0).length,
+    [skills],
+  );
+  const [prewarming, setPrewarming] = useState(false);
+  const [prewarmStatus, setPrewarmStatus] = useState<string | null>(null);
+  // "+" dropdown — unified entry point for every way a new skill
+  // can arrive in the app (create, import, install from tap).
+  const [addMenuOpen, setAddMenuOpen] = useState(false);
+  const addMenuRef = useRef<HTMLDivElement | null>(null);
+  const tapsRef = useRef<HTMLDivElement | null>(null);
+
+  // Close the add-menu on outside click + Escape. Standard popover
+  // pattern — subscribes only while the menu is open.
+  useEffect(() => {
+    if (!addMenuOpen) return;
+    const onClick = (e: MouseEvent) => {
+      if (!addMenuRef.current) return;
+      if (!addMenuRef.current.contains(e.target as Node)) {
+        setAddMenuOpen(false);
+      }
+    };
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") setAddMenuOpen(false);
+    };
+    document.addEventListener("mousedown", onClick);
+    document.addEventListener("keydown", onKey);
+    return () => {
+      document.removeEventListener("mousedown", onClick);
+      document.removeEventListener("keydown", onKey);
+    };
+  }, [addMenuOpen]);
+
+  function focusTaps() {
+    setAddMenuOpen(false);
+    // Scroll the Trusted Taps section into view — user still clicks
+    // the section header to expand if it's collapsed. A brief yellow
+    // flash would be nicer but scrollIntoView is enough for v1.
+    tapsRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
+  }
+
+  /** Import a skill folder from anywhere on disk. Opens a native folder
+   *  picker → backend copies into ~/.claude/skills/<slug>/ → watcher
+   *  picks it up. Handles slug collisions by prompting for an alternate
+   *  name rather than silently overwriting. */
+  async function handleImport() {
+    const picked = await openDialog({
+      directory: true,
+      multiple: false,
+      title: "Pick a folder containing SKILL.md",
+    });
+    if (typeof picked !== "string") return;
+
+    let desiredSlug: string | undefined = undefined;
+    // Loop to handle the "slug already exists" path — backend returns
+    // an error with "already exists" and we re-prompt with a suggestion.
+    for (let attempt = 0; attempt < 3; attempt++) {
+      try {
+        const result = await invokeCmd<{ slug: string; destPath: string }>(
+          "import_skill_folder",
+          { srcPath: picked, desiredSlug: desiredSlug ?? null },
+        );
+        await refresh();
+        setSelectedSlug(result.slug);
+        return;
+      } catch (e) {
+        const msg = String(e);
+        if (msg.includes("already exists")) {
+          const suggested = desiredSlug
+            ? `${desiredSlug}-v2`
+            : picked.split("/").filter(Boolean).pop() + "-v2";
+          const next = await promptDialog(
+            `That slug is taken. Enter a different slug (lowercase, digits, hyphens only):`,
+            { title: "Choose a different slug", default: suggested },
+          );
+          if (!next) return;
+          desiredSlug = next.trim();
+          continue;
+        }
+        await alertDialog(`Import failed: ${msg}`);
+        return;
+      }
+    }
+    await alertDialog("Gave up after 3 collision retries — try again with a unique slug.");
+  }
+
+  /** Toggle whether an Orka-canonical skill is exposed to the bare
+   *  `claude` CLI. Creates or removes a symlink at
+   *  `~/.claude/skills/<slug>` pointing into `~/.orka/skills/<slug>/`.
+   *  No-op (UI-disabled) for global/workspace skills — they're always
+   *  visible to Claude regardless. */
+  async function toggleExposed(s: SkillMeta) {
+    if (s.source !== "orka") return;
+    try {
+      if (s.exposed) {
+        await invokeCmd("unexpose_skill", { slug: s.slug });
+      } else {
+        await invokeCmd("expose_skill", { slug: s.slug });
+      }
+      await refresh();
+    } catch (e) {
+      await alertDialog(`Couldn't ${s.exposed ? "unexpose" : "expose"} skill: ${e}`);
+    }
+  }
+
+  async function handleDelete(s: SkillMeta) {
+    const ok = await confirmDialog(
+      `Delete skill "${s.slug}"?\n\nThis removes the folder from ${s.source === "workspace" ? "the workspace" : "~/.claude/skills/"} and cannot be undone.`,
+      {
+        title: "Delete skill",
+        okLabel: "Delete",
+        cancelLabel: "Cancel",
+      },
+    );
+    if (!ok) return;
+    try {
+      await invokeCmd("delete_skill", { slug: s.slug });
+      if (selectedSlug === s.slug) setSelectedSlug(null);
+      await refresh();
+    } catch (e) {
+      await alertDialog(`Delete failed: ${e}`);
+    }
+  }
+
+  async function prewarmAll() {
+    if (prewarming) return;
+    if (missingExamplesCount === 0) return;
+    const estSeconds = Math.ceil(missingExamplesCount * 5); // rough: ~5s/skill w/ Sonnet
+    const ok = await confirmDialog(
+      `Generate example prompts for ${missingExamplesCount} skill${
+        missingExamplesCount === 1 ? "" : "s"
+      } that don't have any?\n\n` +
+        `This calls Claude (Sonnet) once per skill and writes the result back to each SKILL.md. ` +
+        `Approximate time: ${estSeconds}s. Cost: ~$${(missingExamplesCount * 0.01).toFixed(2)}.`,
+      {
+        title: "Prewarm examples",
+        okLabel: "Generate",
+        cancelLabel: "Cancel",
+      },
+    );
+    if (!ok) return;
+
+    setPrewarming(true);
+    setPrewarmStatus(`Starting… (0 of ${missingExamplesCount})`);
+    const unlisten = await listenEvent<PrewarmProgress>(
+      "skill-examples:prewarm:progress",
+      (p) => {
+        if (p.status === "start") {
+          setPrewarmStatus(`Generating for ${p.slug} (${p.current} of ${p.total})`);
+        } else if (p.status === "err") {
+          setPrewarmStatus(
+            `✗ ${p.slug} failed — continuing (${p.current} of ${p.total})`,
+          );
+        }
+      },
+    );
+    try {
+      const summary = await invokeCmd<PrewarmSummary>(
+        "suggest_examples_for_all_skills",
+      );
+      await refresh();
+      setPrewarmStatus(null);
+      await alertDialog(
+        `Done.\n\n` +
+          `  ✓ ${summary.succeeded} skills got new examples\n` +
+          `  ✗ ${summary.failed} failed${
+            summary.failed > 0
+              ? `\n\nFailed: ${summary.results
+                  .filter((r) => r.status === "err")
+                  .map((r) => `${r.slug} (${r.error ?? "unknown"})`)
+                  .join(", ")}`
+              : ""
+          }`,
+        "Prewarm complete",
+      );
+    } catch (e) {
+      setPrewarmStatus(null);
+      await alertDialog(`Prewarm failed: ${e}`);
+    } finally {
+      unlisten();
+      setPrewarming(false);
+    }
+  }
 
   return (
     <div className="skills-tab">
       <aside className="skills-tab__sidebar">
         <div className="sidebar__header">
           <span className="sidebar__title">Skills</span>
-          <button
-            className="sidebar__toggle"
-            onClick={() => {
-              void refresh();
-            }}
-            title="Rescan ~/.claude/skills/"
-          >
-            ↻
-          </button>
+          <div className="sidebar__header-actions">
+            <div className="skills-tab__add-wrap" ref={addMenuRef}>
+              <button
+                className="sidebar__toggle"
+                onClick={() => setAddMenuOpen((v) => !v)}
+                aria-haspopup="menu"
+                aria-expanded={addMenuOpen}
+                title="Add a skill"
+              >
+                + ▾
+              </button>
+              {addMenuOpen && (
+                <div className="skills-tab__add-menu" role="menu">
+                  <button
+                    type="button"
+                    role="menuitem"
+                    className="skills-tab__add-menu-item"
+                    onClick={() => {
+                      setAddMenuOpen(false);
+                      setSelectedSlug("orka-skill-builder");
+                    }}
+                  >
+                    <span className="skills-tab__add-menu-icon">✨</span>
+                    <span className="skills-tab__add-menu-label">
+                      Create new skill
+                      <span className="skills-tab__add-menu-hint">
+                        via orka-skill-builder
+                      </span>
+                    </span>
+                  </button>
+                  <button
+                    type="button"
+                    role="menuitem"
+                    className="skills-tab__add-menu-item"
+                    onClick={() => {
+                      setAddMenuOpen(false);
+                      void handleImport();
+                    }}
+                  >
+                    <span className="skills-tab__add-menu-icon">📁</span>
+                    <span className="skills-tab__add-menu-label">
+                      Import folder
+                      <span className="skills-tab__add-menu-hint">
+                        copy a skill dir into ~/.claude/skills/
+                      </span>
+                    </span>
+                  </button>
+                  <button
+                    type="button"
+                    role="menuitem"
+                    className="skills-tab__add-menu-item"
+                    onClick={focusTaps}
+                  >
+                    <span className="skills-tab__add-menu-icon">🔗</span>
+                    <span className="skills-tab__add-menu-label">
+                      Install from tap
+                      <span className="skills-tab__add-menu-hint">
+                        jump to Trusted Sources
+                      </span>
+                    </span>
+                  </button>
+                </div>
+              )}
+            </div>
+            <button
+              className="sidebar__toggle"
+              onClick={() => {
+                void refresh();
+              }}
+              title="Rescan ~/.claude/skills/"
+            >
+              ↻
+            </button>
+          </div>
         </div>
         <div className="skills-tab__search">
           <input
@@ -77,6 +390,23 @@ export function SkillsTab({ onOpenInCanvas }: SkillsTabProps = {}) {
             onChange={(e) => setFilter(e.target.value)}
           />
         </div>
+        {!loading && missingExamplesCount > 0 && !prewarming && (
+          <button
+            type="button"
+            className="skills-tab__prewarm"
+            onClick={() => void prewarmAll()}
+            title={`Generate example prompts for ${missingExamplesCount} skills that don't have any yet`}
+          >
+            ✨ Prewarm examples for {missingExamplesCount} skill
+            {missingExamplesCount === 1 ? "" : "s"}
+          </button>
+        )}
+        {prewarming && prewarmStatus && (
+          <div className="skills-tab__prewarm-status" role="status">
+            <span className="skills-tab__prewarm-dot" aria-hidden>•</span>
+            {prewarmStatus}
+          </div>
+        )}
         {loading && <div className="sidebar__status">loading…</div>}
         {!loading && filtered.length === 0 && (
           <div className="sidebar__status">
@@ -86,24 +416,37 @@ export function SkillsTab({ onOpenInCanvas }: SkillsTabProps = {}) {
           </div>
         )}
         <div className="skills-tab__list">
-          {filtered.map((s) => {
+          {filtered.map((s, idx) => {
             const tapBadge = extractTapPrefix(s.slug);
+            const meta = isMetaSkill(s.slug);
+            // Draw a divider AFTER the last meta-skill so the visual
+            // grouping is obvious: built-in tools up top, user skills
+            // below. Detected by comparing this row's meta-ness to
+            // the next row's.
+            const nextIsUser =
+              idx < filtered.length - 1 && !isMetaSkill(filtered[idx + 1].slug);
+            const needsDivider = meta && nextIsUser;
             return (
               <div
                 key={s.slug}
                 className={
                   "skills-tab__item" +
-                  (s.slug === selectedSlug ? " skills-tab__item--active" : "")
+                  (s.slug === selectedSlug ? " skills-tab__item--active" : "") +
+                  (meta ? " skills-tab__item--meta" : "") +
+                  (needsDivider ? " skills-tab__item--divider" : "")
                 }
                 onClick={() => setSelectedSlug(s.slug)}
                 title={s.description}
               >
                 <span className="skills-tab__icon">
-                  {s.has_graph ? "◆" : "◇"}
+                  {meta ? "✨" : s.has_graph ? "◆" : "◇"}
                 </span>
                 <div className="skills-tab__info">
                   <div className="skills-tab__slug">
-                    {s.slug}
+                    <span className="skills-tab__slug-text">{s.slug}</span>
+                    {meta && (
+                      <span className="skills-tab__meta-badge">built-in</span>
+                    )}
                     {tapBadge && (
                       <span className="skills-tab__tap-badge">{tapBadge}</span>
                     )}
@@ -111,17 +454,50 @@ export function SkillsTab({ onOpenInCanvas }: SkillsTabProps = {}) {
                       <span className="skills-tab__composite-tag">pipeline</span>
                     )}
                   </div>
-                  <div className="skills-tab__desc">
-                    {s.description.slice(0, 80)}
-                    {s.description.length > 80 ? "…" : ""}
-                  </div>
+                  <div className="skills-tab__desc">{firstSentence(s.description)}</div>
                 </div>
-                <span className="skills-tab__source">{s.source}</span>
+                {s.source === "orka" && !meta && (
+                  <button
+                    type="button"
+                    className={
+                      "skills-tab__expose" +
+                      (s.exposed ? " skills-tab__expose--on" : "")
+                    }
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      void toggleExposed(s);
+                    }}
+                    title={
+                      s.exposed
+                        ? `Exposed to claude CLI — click to hide (removes symlink at ~/.claude/skills/${s.slug})`
+                        : `Orka-only. Click to expose to the claude CLI (creates symlink at ~/.claude/skills/${s.slug})`
+                    }
+                    aria-label={s.exposed ? "Unexpose skill" : "Expose skill"}
+                  >
+                    🔗
+                  </button>
+                )}
+                {!meta && (
+                <button
+                  type="button"
+                  className="skills-tab__delete"
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    void handleDelete(s);
+                  }}
+                  title={`Delete ${s.slug}`}
+                  aria-label={`Delete ${s.slug}`}
+                >
+                  ×
+                </button>
+                )}
               </div>
             );
           })}
         </div>
-        <TrustedTapsSection />
+        <div ref={tapsRef}>
+          <TrustedTapsSection />
+        </div>
       </aside>
 
       <section className="skills-tab__runner">

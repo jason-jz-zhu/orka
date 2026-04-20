@@ -7,6 +7,10 @@ description: >
   someone says "make a demo video", "create a product demo", "record a
   marketing video", or "demo for my app".
 allowed-tools: Read, Write, Bash
+examples:
+  - "Make a demo for Orka, a Claude-wrapping desktop app. Show the trust modal and the skill runner."
+  - "Demo for a side project called Moodboard — a Figma plugin that auto-generates palettes from a URL."
+  - "Record a 30-second marketing video for my CLI tool that migrates Postgres schemas."
 orka:
   schema: 1
   inputs:

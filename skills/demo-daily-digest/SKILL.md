@@ -4,6 +4,10 @@ description: >
   Summarize recent files in a folder and save the digest to Apple Notes.
   Use for "daily digest", "morning summary", or "summarize my notes".
 allowed-tools: Read, Write, Bash
+examples:
+  - "Summarize everything I wrote in ~/Documents/journal this week."
+  - "Daily digest of my Downloads folder, focus on anything related to finance."
+  - "Summarize ~/work/meeting-notes from the last 3 days and flag action items."
 orka:
   schema: 1
   inputs:

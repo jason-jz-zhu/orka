@@ -13,9 +13,20 @@ export type SkillMeta = {
   name: string;
   description: string;
   path: string;
-  source: "global" | "workspace" | "sibling";
+  /** `orka` = canonical Orka-managed skill at `~/.orka/skills/`.
+   *  `global` = lives directly in `~/.claude/skills/` (user-authored
+   *  or tap-installed). `workspace` = project-scoped. */
+  source: "orka" | "global" | "workspace" | "sibling";
   has_graph: boolean;
   inputs: SkillInputMeta[];
+  /** Natural-language example prompts from SKILL.md frontmatter
+   *  `examples:`. Surfaced as clickable chips in SkillRunner so users
+   *  see what to type without reading the skill's body. */
+  examples: string[];
+  /** True when the skill is visible to a bare `claude` CLI invocation.
+   *  Orka-canonical skills are exposed only via a symlink the user
+   *  opts into. Global/workspace skills are always exposed. */
+  exposed: boolean;
 };
 
 type SkillsState = {

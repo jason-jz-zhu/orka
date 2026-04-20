@@ -1,5 +1,5 @@
 mod parse;
-mod write;
+pub mod write;
 
 pub use parse::{parse_skill_md, parse_skill_md_str, ParsedSkill, GraphBlock, SkillInput, SkillOutput, GraphNode, DriftStatus};
 pub use write::write_graph_block;

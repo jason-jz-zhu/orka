@@ -7,6 +7,10 @@ description: >
   "make a skill", "build a pipeline", "automate this", "turn this into a
   skill", or describes a repeated task they want to reuse or schedule.
 allowed-tools: Read, Write, Bash
+examples:
+  - "Make a skill that takes a GitHub repo URL and drafts a 1-page onboarding guide."
+  - "Build a pipeline: read my meeting notes, extract action items, save to Apple Reminders."
+  - "Turn this conversation into a reusable skill — I want to schedule it weekly."
 ---
 
 # Orka Skill Builder
@@ -37,10 +41,12 @@ Break the request into distinct steps. For each step, decide:
 2. **Is it specific to this pipeline only?** (e.g., "combine step 1 and 2
    into a briefing with these exact sections") → mark as `inline` — it
    becomes an `agent` node with a prompt, not a separate skill.
-3. **Does it already exist?** → run `ls ~/.claude/skills/` and check. If a
-   skill with a matching purpose exists, reuse it via `skill_ref` instead of
-   creating a duplicate. Tell the user: "You already have `<name>` — I'll
-   reuse it."
+3. **Does it already exist?** → run `ls ~/.orka/skills/ ~/.claude/skills/`
+   and check both roots. Orka-managed skills live in `~/.orka/skills/`;
+   hand-authored or tap-installed ones live in `~/.claude/skills/`. If a
+   skill with a matching purpose exists in either, reuse it via `skill_ref`
+   instead of creating a duplicate. Tell the user: "You already have
+   `<name>` — I'll reuse it."
 
 If there is only ONE step and it doesn't call other skills → this is an
 **atomic skill**. Skip to Phase 4, generate a single SKILL.md (no graph block).
@@ -74,7 +80,7 @@ I'll create:
          ↑
     summarize (reused)
 
-Save all to ~/.claude/skills/daily-competitor-brief/ ?
+Save all to ~/.orka/skills/daily-competitor-brief/ ?
 ```
 
 Wait for confirmation before proceeding.
@@ -103,7 +109,7 @@ Generate a SKILL.md that:
 For a composite pipeline called `daily-competitor-brief`:
 
 ```
-~/.claude/skills/daily-competitor-brief/
+~/.orka/skills/daily-competitor-brief/
 ├── SKILL.md                    (composite — the pipeline)
 ├── github-new-issues/          (atomic sub-skill)
 │   └── SKILL.md
@@ -114,10 +120,12 @@ For a composite pipeline called `daily-competitor-brief`:
 The composite SKILL.md references sub-skills by name. Orka resolves them as
 siblings first (same folder), then workspace, then global.
 
-If the user wants an atomic skill to be globally reusable (not just inside
-this pipeline), ALSO copy it to `~/.claude/skills/<name>/` at the top level.
-Ask: "Should `github-new-issues` be available globally or only inside this
-pipeline?"
+If the user wants an atomic skill to be reusable from the plain `claude`
+CLI (not just inside Orka), mention that after creation they can toggle
+the chain-link icon on the skill card to expose it. Don't copy anywhere
+manually — the toggle creates a symlink from `~/.claude/skills/<name>`
+back to the canonical `~/.orka/skills/<name>/`, keeping a single source
+of truth.
 
 ## Phase 5 — Save and confirm
 
@@ -127,7 +135,7 @@ pipeline?"
 
 ```
 Done! Created:
-  📁 ~/.claude/skills/daily-competitor-brief/
+  📁 ~/.orka/skills/daily-competitor-brief/
      ├── SKILL.md (pipeline: 4 nodes)
      ├── github-new-issues/SKILL.md (new atomic skill)
      └── producthunt-daily/SKILL.md (new atomic skill)
@@ -152,6 +160,9 @@ name: <slug>                  # lowercase, hyphens, no spaces
 description: >                # 1-2 sentences. MUST be specific — Claude's
   <what it does and when>     # skill router uses this to match user intent.
 allowed-tools: <tools>        # Read, Write, Bash, etc. Only what's needed.
+examples:                     # 1-3 natural-language prompts the user
+  - "<concrete example 1>"    # could paste into the skill's prompt box.
+  - "<concrete example 2>"    # Shown as clickable chips in the UI.
 orka:
   schema: 1
   inputs:                     # omit if no inputs
@@ -282,7 +293,7 @@ orka:
 - NEVER skip the `orka:` section in frontmatter.
 - NEVER put the graph block inside a fenced code block — it must be a raw HTML comment.
 - ALWAYS show the user the plan (Phase 3) before generating files.
-- ALWAYS check existing skills with `ls ~/.claude/skills/` before creating duplicates.
+- ALWAYS check existing skills with `ls ~/.orka/skills/` before creating duplicates.
 - If the user describes conditional logic (if/else), put branching inside a single agent node's prompt.
 - If a sub-skill might be useful globally, ask whether to also install it at the top level.
 - When distilling from a conversation, separate "exploration/clarification" messages from "actual task steps" — only the latter become skill content.

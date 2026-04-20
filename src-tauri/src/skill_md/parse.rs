@@ -16,6 +16,11 @@ pub struct ParsedSkill {
     pub drift: DriftStatus,
     pub raw_frontmatter: String,
     pub raw_body: String,
+    /// Natural-language example prompts surfaced in the Skills-tab runner
+    /// as clickable chips. Skill authors write 1-3 concrete examples so
+    /// new users see what this skill expects instead of a blank
+    /// "Tell Claude what you want" textarea. Optional; empty vec is fine.
+    pub examples: Vec<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -96,6 +101,7 @@ pub fn parse_skill_md_str(content: &str) -> Result<ParsedSkill, String> {
     let viewport = orka
         .and_then(|o| o.get("viewport"))
         .cloned();
+    let examples = parse_examples(&fm);
 
     let (graph_block, drift) = parse_graph_and_drift(&body);
 
@@ -111,7 +117,29 @@ pub fn parse_skill_md_str(content: &str) -> Result<ParsedSkill, String> {
         drift,
         raw_frontmatter: frontmatter_str,
         raw_body: body,
+        examples,
     })
+}
+
+/// Parse the optional top-level `examples:` frontmatter field. Accepts
+/// either a YAML array of strings or a single string (coerced into a
+/// one-element vec). Non-string entries are silently skipped.
+fn parse_examples(fm: &serde_json::Value) -> Vec<String> {
+    let Some(v) = fm.get("examples") else {
+        return Vec::new();
+    };
+    if let Some(s) = v.as_str() {
+        let t = s.trim();
+        return if t.is_empty() { Vec::new() } else { vec![t.to_string()] };
+    }
+    let Some(arr) = v.as_array() else {
+        return Vec::new();
+    };
+    arr.iter()
+        .filter_map(|e| e.as_str())
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty())
+        .collect()
 }
 
 fn split_frontmatter(content: &str) -> Result<(String, String), String> {
