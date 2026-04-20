@@ -1,4 +1,5 @@
 mod annotations;
+mod claude_gate;
 mod model_config;
 mod session_brief;
 mod session_synthesis;
@@ -10,13 +11,23 @@ mod graph;
 mod kb;
 mod node_runner;
 mod onboarding;
+pub mod perf_smoke;
 mod pipeline_gen;
+mod run_artifacts;
 mod run_log;
 mod schedules;
 mod sessions;
+mod skill_import;
 pub mod skill_md;
+pub mod skill_trust;
 mod skills;
+mod seed_skills;
+mod suggest_examples;
+mod terminal_launcher;
+mod skill_workdir;
 mod workspace;
+#[cfg(test)]
+mod perf_harness;
 
 use node_runner::NodeMode;
 use tauri::AppHandle;
@@ -34,6 +45,11 @@ async fn run_node(
     resume_id: Option<String>,
     add_dirs: Option<Vec<String>>,
     allowed_tools: Option<Vec<String>>,
+    workdir_key: Option<String>,
+    skill_slug: Option<String>,
+    schedule_label: Option<String>,
+    inputs_for_template: Option<Vec<String>>,
+    explicit_workdir: Option<String>,
 ) -> Result<(), String> {
     node_runner::run_claude(
         app,
@@ -43,6 +59,11 @@ async fn run_node(
         resume_id,
         add_dirs.unwrap_or_default(),
         node_runner::ToolScope::from_allowed(allowed_tools),
+        workdir_key,
+        skill_slug,
+        schedule_label,
+        inputs_for_template,
+        explicit_workdir,
     )
     .await
 }
@@ -60,6 +81,11 @@ async fn run_agent_node(
     resume_id: Option<String>,
     add_dirs: Option<Vec<String>>,
     allowed_tools: Option<Vec<String>>,
+    workdir_key: Option<String>,
+    skill_slug: Option<String>,
+    schedule_label: Option<String>,
+    inputs_for_template: Option<Vec<String>>,
+    explicit_workdir: Option<String>,
 ) -> Result<(), String> {
     node_runner::run_claude(
         app,
@@ -69,6 +95,11 @@ async fn run_agent_node(
         resume_id,
         add_dirs.unwrap_or_default(),
         node_runner::ToolScope::from_allowed(allowed_tools),
+        workdir_key,
+        skill_slug,
+        schedule_label,
+        inputs_for_template,
+        explicit_workdir,
     )
     .await
 }
@@ -103,19 +134,43 @@ async fn kb_dir(id: String) -> Result<String, String> {
     kb::sources_dir(&id).await
 }
 
+// The three session scanners read disk and can take 10-100ms+ on machines
+// with many projects or slow storage. Wrapping with `spawn_blocking` keeps
+// the Tauri event loop responsive — previously these were plain sync
+// functions, so an app-wide `list_projects` call would stall every other
+// command waiting in the queue.
 #[tauri::command]
-fn list_projects() -> Vec<sessions::ProjectInfo> {
-    sessions::list_projects()
+async fn list_projects() -> Vec<sessions::ProjectInfo> {
+    tokio::task::spawn_blocking(sessions::list_projects)
+        .await
+        .unwrap_or_default()
 }
 
 #[tauri::command]
-fn list_sessions(project_key: String) -> Vec<sessions::SessionInfo> {
-    sessions::list_sessions(&project_key)
+async fn list_sessions(project_key: String) -> Vec<sessions::SessionInfo> {
+    tokio::task::spawn_blocking(move || sessions::list_sessions(&project_key))
+        .await
+        .unwrap_or_default()
 }
 
 #[tauri::command]
-fn read_session(path: String) -> Vec<sessions::SessionLine> {
-    sessions::read_session(&path)
+async fn read_session(
+    path: String,
+    offset: Option<usize>,
+    limit: Option<usize>,
+) -> Vec<sessions::SessionLine> {
+    tokio::task::spawn_blocking(move || {
+        sessions::read_session_paginated(&path, offset.unwrap_or(0), limit)
+    })
+    .await
+    .unwrap_or_default()
+}
+
+#[tauri::command]
+async fn find_session_by_id(session_id: String) -> Option<sessions::SessionInfo> {
+    tokio::task::spawn_blocking(move || sessions::find_session_by_id(&session_id))
+        .await
+        .unwrap_or(None)
 }
 
 #[tauri::command]
@@ -888,6 +943,19 @@ fn append_run(record: run_log::RunRecord) -> Result<(), String> {
 }
 
 #[tauri::command]
+async fn clear_runs() -> Result<u32, String> {
+    // spawn_blocking: clear_runs sync-deletes every JSONL + every
+    // annotation file (potentially 1000s). On slow disks that's
+    // seconds of blocking I/O; keeping it on the event loop would
+    // stall other Tauri commands behind it. Users trigger this
+    // deliberately from a confirm dialog so latency matters less
+    // than responsiveness.
+    tokio::task::spawn_blocking(run_log::clear_runs)
+        .await
+        .unwrap_or_else(|_| Err("clear_runs panicked".into()))
+}
+
+#[tauri::command]
 fn get_run(id: String) -> Result<run_log::RunRecord, String> {
     run_log::get_run(&id).ok_or_else(|| format!("run '{id}' not found"))
 }
@@ -1035,6 +1103,7 @@ pub fn run() {
             kb_dir,
             list_projects,
             list_sessions,
+            find_session_by_id,
             read_session,
             watch_session,
             unwatch_session,
@@ -1068,12 +1137,26 @@ pub fn run() {
             trusted_taps::uninstall_tap,
             trusted_taps::add_custom_tap,
             trusted_taps::remove_custom_tap,
+            trusted_taps::preview_tap,
             skill_evolution::suggest_skill_evolution,
             skill_evolution::apply_skill_evolution,
             session_synthesis::synthesize_sessions,
             session_synthesis::continue_synthesis,
+            session_synthesis::synthesize_sessions_stream,
+            session_synthesis::continue_synthesis_stream,
             model_config::get_model_config,
             model_config::set_model_config,
+            perf_smoke::perf_smoke_test,
+            skill_trust::check_skill_trust,
+            skill_trust::trust_skill,
+            skill_trust::forget_skill_trust,
+            skill_trust::get_skill_permissions,
+            suggest_examples::suggest_skill_examples,
+            suggest_examples::suggest_examples_for_all_skills,
+            skills::delete_skill,
+            skills::expose_skill,
+            skills::unexpose_skill,
+            skill_import::import_skill_folder,
             dest_profiles::list_destination_profiles,
             dest_profiles::save_destination_profile,
             dest_profiles::delete_destination_profile,
@@ -1081,13 +1164,27 @@ pub fn run() {
             dest_profiles::test_wework_webhook,
             dest_profiles::send_via_profile,
             schedules::list_schedules,
+            schedules::list_schedules_for_skill,
             schedules::get_schedule,
             schedules::save_schedule,
             schedules::delete_schedule,
             schedules::os_notify,
+            schedules::compute_default_schedule_label,
             open_in_vscode,
             open_in_terminal,
             open_app_by_name,
+            terminal_launcher::get_terminal_config,
+            terminal_launcher::set_terminal_config,
+            terminal_launcher::detect_available_terminals,
+            terminal_launcher::open_session_in_terminal,
+            skill_workdir::get_skill_output_config,
+            skill_workdir::list_skill_output_configs,
+            skill_workdir::set_skill_output_folder,
+            skill_workdir::clear_skill_output_folder,
+            skill_workdir::preview_run_workdir,
+            skill_workdir::reveal_in_finder,
+            run_artifacts::reconstruct_run_output,
+            seed_skills::seed_demo_skill_if_first_run,
             list_workspaces,
             active_workspace,
             create_workspace,
@@ -1105,11 +1202,21 @@ pub fn run() {
             load_skill_md,
             save_node_as_skill,
             list_runs,
+            clear_runs,
             get_run,
             append_run,
         ])
-        .run(tauri::generate_context!())
-        .expect("error while running tauri application");
+        .build(tauri::generate_context!())
+        .expect("error while building tauri application")
+        .run(|_app, event| {
+            // On app exit, tear down any claude subprocesses we
+            // spawned. Without this, quitting Orka mid-run leaves
+            // orphaned claude processes consuming CPU + API quota
+            // until the user finds them in Activity Monitor.
+            if let tauri::RunEvent::ExitRequested { .. } = event {
+                node_runner::cancel_all_nodes();
+            }
+        });
 }
 
 #[cfg(test)]

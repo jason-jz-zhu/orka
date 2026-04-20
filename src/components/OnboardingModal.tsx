@@ -1,5 +1,9 @@
 import { useEffect, useState } from "react";
 import { invokeCmd } from "../lib/tauri";
+import {
+  markOnboardingCompleted,
+  resetOnboarding,
+} from "../lib/onboarding";
 
 type Status = {
   claude_installed: boolean;
@@ -14,27 +18,10 @@ type Props = {
   onClose: () => void;
 };
 
-const ONBOARDED_KEY = "orka:onboardingCompleted";
-
-export function hasCompletedOnboarding(): boolean {
-  try {
-    return localStorage.getItem(ONBOARDED_KEY) === "1";
-  } catch {
-    return false;
-  }
-}
-
-export function markOnboardingCompleted() {
-  try {
-    localStorage.setItem(ONBOARDED_KEY, "1");
-  } catch {}
-}
-
-export function resetOnboarding() {
-  try {
-    localStorage.removeItem(ONBOARDED_KEY);
-  } catch {}
-}
+// Re-export so existing imports from `./components/OnboardingModal`
+// continue to work. Keeps the modal lazy-chunked while the tiny
+// localStorage helpers stay eager in the main bundle via ../lib/onboarding.
+export { markOnboardingCompleted, resetOnboarding };
 
 export default function OnboardingModal({ onClose }: Props) {
   const [status, setStatus] = useState<Status | null>(null);

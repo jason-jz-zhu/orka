@@ -6,7 +6,11 @@
 //!   - synthesis     → claude-opus-4-7[1m] (cross-source reasoning benefits
 //!                     massively from Opus's 1M context window)
 //!   - skill_run     → claude-opus-4-7[1m] (user-facing runs deserve the best)
-//!   - evolution     → claude-opus-4-7[1m] (SKILL.md rewrites need nuance)
+//!   - evolution     → haiku (structured JSON extraction from annotations;
+//!                     Haiku matches Opus quality at ~10x speed)
+//!   - suggestExamples → sonnet (generate natural-language example prompts
+//!                       from a SKILL.md; one-off per skill, Haiku tends
+//!                       to write template-y examples)
 //!
 //! Storage: ~/.orka/model-config.json. Safe to delete — defaults
 //! restored next read. Tauri commands get_model_config / set_model_config
@@ -22,6 +26,12 @@ pub struct ModelConfig {
     #[serde(rename = "skillRun")]
     pub skill_run: String,
     pub evolution: String,
+    #[serde(rename = "suggestExamples", default = "default_suggest_examples")]
+    pub suggest_examples: String,
+}
+
+fn default_suggest_examples() -> String {
+    "sonnet".into()
 }
 
 impl Default for ModelConfig {
@@ -30,7 +40,8 @@ impl Default for ModelConfig {
             brief: "haiku".into(),
             synthesis: "claude-opus-4-7[1m]".into(),
             skill_run: "claude-opus-4-7[1m]".into(),
-            evolution: "claude-opus-4-7[1m]".into(),
+            evolution: "haiku".into(),
+            suggest_examples: "sonnet".into(),
         }
     }
 }
@@ -59,6 +70,11 @@ fn load() -> ModelConfig {
             .get("evolution")
             .and_then(|s| s.as_str())
             .unwrap_or(&d.evolution)
+            .to_string(),
+        suggest_examples: v
+            .get("suggestExamples")
+            .and_then(|s| s.as_str())
+            .unwrap_or(&d.suggest_examples)
             .to_string(),
     }
 }
@@ -102,6 +118,10 @@ pub fn model_for_evolution() -> String {
     load().evolution
 }
 
+pub fn model_for_suggest_examples() -> String {
+    load().suggest_examples
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -112,6 +132,7 @@ mod tests {
         assert_eq!(d.brief, "haiku");
         assert_eq!(d.synthesis, "claude-opus-4-7[1m]");
         assert_eq!(d.skill_run, "claude-opus-4-7[1m]");
-        assert_eq!(d.evolution, "claude-opus-4-7[1m]");
+        assert_eq!(d.evolution, "haiku");
+        assert_eq!(d.suggest_examples, "sonnet");
     }
 }

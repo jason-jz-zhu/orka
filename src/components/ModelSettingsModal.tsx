@@ -7,6 +7,7 @@ interface ModelConfig {
   synthesis: string;
   skillRun: string;
   evolution: string;
+  suggestExamples: string;
 }
 
 type Props = { onClose: () => void };
@@ -42,6 +43,10 @@ const FEATURE_LABELS: Record<FeatureKey, { title: string; subtitle: string }> = 
   evolution: {
     title: "Skill Evolution",
     subtitle: "💡 Evolve — propose SKILL.md updates from your annotations",
+  },
+  suggestExamples: {
+    title: "Suggest Examples",
+    subtitle: "✨ Generate example prompts for skills missing them",
   },
 };
 

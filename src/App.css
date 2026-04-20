@@ -80,6 +80,27 @@ html, body, #root { margin: 0; height: 100%; }
   background: #2a6df4 !important;
   color: white !important;
 }
+.tabs__item--closable {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+.tabs__item-close {
+  background: transparent !important;
+  border: none !important;
+  color: inherit !important;
+  padding: 0 !important;
+  width: 16px;
+  height: 16px;
+  line-height: 16px;
+  font-size: 14px;
+  border-radius: 4px !important;
+  cursor: pointer;
+  opacity: 0;
+  transition: opacity 0.12s ease;
+}
+.tabs__item--closable:hover .tabs__item-close { opacity: 0.7; }
+.tabs__item-close:hover { opacity: 1 !important; background: rgba(255,255,255,0.15) !important; }
 
 .toolbar__primary {
   background: #1b7f4c !important;
@@ -446,6 +467,48 @@ html, body, #root { margin: 0; height: 100%; }
   margin-bottom: 14px;
   cursor: pointer;
   font-size: 13px;
+}
+
+/* Skill-only prompt field. Shown inside ScheduleModal when the target
+   pipeline_name starts with `skill:` so user can bake a natural-language
+   prompt into the schedule the same way they'd type it into the Skills
+   tab textarea. */
+.sched__prompt-wrap {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-bottom: 14px;
+}
+.sched__prompt-label {
+  font-size: 12px;
+  color: #c4ccd8;
+}
+.sched__prompt-label code {
+  background: #1a1d24;
+  padding: 1px 5px;
+  border-radius: 3px;
+  font-size: 11px;
+  color: #9ab4ff;
+}
+.sched__prompt-input {
+  background: #0f1218;
+  border: 1px solid #22262e;
+  border-radius: 6px;
+  color: #d3d8e0;
+  padding: 8px 10px;
+  font-size: 12px;
+  line-height: 1.5;
+  font-family: inherit;
+  resize: vertical;
+}
+.sched__prompt-input:focus {
+  outline: none;
+  border-color: #2a6df4;
+}
+.sched__prompt-hint {
+  font-size: 11px;
+  color: #8a94a6;
+  line-height: 1.4;
 }
 .sched__kinds {
   display: flex;
@@ -1129,6 +1192,223 @@ html, body, #root { margin: 0; height: 100%; }
 }
 
 /* ========== SessionCard ========== */
+.skill-trust {
+  max-width: 640px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+.skill-trust__meta {
+  background: #0f1218;
+  border: 1px solid #22262e;
+  border-radius: 6px;
+  padding: 10px 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  font-size: 12px;
+}
+.skill-trust__meta-row {
+  display: flex;
+  gap: 10px;
+  align-items: flex-start;
+}
+.skill-trust__meta-label {
+  color: #6e7685;
+  min-width: 130px;
+  text-transform: uppercase;
+  font-size: 10px;
+  letter-spacing: 0.5px;
+  padding-top: 2px;
+}
+.skill-trust__meta-val {
+  color: #d3d8e0;
+  word-break: break-all;
+  flex: 1;
+}
+.skill-trust__meta-val--muted {
+  color: #6e7685;
+}
+.skill-trust__path {
+  font-size: 11px;
+  color: #8a94a6;
+}
+.skill-trust__perms {
+  background: #0f1218;
+  border: 1px solid #22262e;
+  border-radius: 6px;
+  padding: 12px 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  max-height: 360px;
+  overflow: auto;
+}
+.skill-trust__perms-title {
+  color: #d3d8e0;
+  font-size: 12px;
+  font-weight: 600;
+  margin: 0;
+}
+.skill-trust__perms-loading {
+  color: #6e7685;
+  font-size: 11px;
+  font-style: italic;
+}
+.skill-trust__perm-group {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 8px 10px;
+  border-radius: 5px;
+  background: rgba(255, 255, 255, 0.02);
+}
+.skill-trust__perm-group--warn {
+  background: rgba(240, 158, 50, 0.08);
+  border: 1px solid rgba(240, 158, 50, 0.25);
+}
+.skill-trust__perm-group-label {
+  color: #c4ccd8;
+  font-size: 11px;
+  font-weight: 600;
+}
+.skill-trust__perm-note {
+  color: #8a94a6;
+  font-size: 11px;
+  line-height: 1.5;
+}
+.skill-trust__perm-note code {
+  background: #1a1d24;
+  padding: 1px 5px;
+  border-radius: 3px;
+  font-size: 10px;
+}
+.skill-trust__perm-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+.skill-trust__chip {
+  background: #1a1d24;
+  border: 1px solid #2a3040;
+  color: #8ec3ff;
+  padding: 2px 8px;
+  border-radius: 10px;
+  font-size: 11px;
+}
+.skill-trust__perm-list {
+  margin: 2px 0 0 0;
+  padding-left: 18px;
+  color: #c4ccd8;
+  font-size: 11px;
+  line-height: 1.7;
+}
+.skill-trust__perm-list code {
+  background: #1a1d24;
+  padding: 1px 5px;
+  border-radius: 3px;
+  font-size: 10px;
+}
+.skill-trust__perm-cwd {
+  background: #0a0c10;
+  padding: 4px 8px;
+  border-radius: 3px;
+  font-size: 11px;
+  color: #8ec3ff;
+  display: inline-block;
+  margin-bottom: 2px;
+  word-break: break-all;
+}
+.skill-trust__perm-input-type {
+  color: #6e7685;
+  font-size: 10px;
+}
+.skill-trust__perm-input-desc {
+  color: #8a94a6;
+  font-size: 10px;
+  margin-left: 4px;
+}
+.skill-trust__show-full {
+  background: transparent !important;
+  border: none !important;
+  color: #6ea8ff !important;
+  font-size: 11px;
+  padding: 4px 0 !important;
+  text-align: left !important;
+  cursor: pointer;
+  align-self: flex-start;
+}
+.skill-trust__show-full:hover {
+  color: #8ec3ff !important;
+  text-decoration: underline;
+}
+.skill-trust__preview-label {
+  color: #6e7685;
+  font-size: 10px;
+  letter-spacing: 0.5px;
+  text-transform: uppercase;
+  margin-top: 2px;
+}
+.skill-trust__preview {
+  background: #0a0c10;
+  border: 1px solid #22262e;
+  border-radius: 6px;
+  padding: 10px 12px;
+  max-height: 280px;
+  overflow: auto;
+  font-size: 11px;
+  line-height: 1.5;
+  color: #c4ccd8;
+  white-space: pre-wrap;
+  margin: 0;
+}
+.skill-trust__hint {
+  font-size: 11px;
+  color: #8a94a6;
+  line-height: 1.5;
+  background: rgba(42, 109, 244, 0.08);
+  border-left: 2px solid #2a6df4;
+  padding: 8px 12px;
+  border-radius: 4px;
+}
+.skill-trust__actions {
+  display: flex;
+  gap: 8px;
+  justify-content: flex-end;
+  margin-top: 4px;
+}
+
+.lazy-fallback {
+  color: #6e7685;
+  padding: 12px 14px;
+  font-size: 12px;
+}
+
+.session-card--skeleton {
+  cursor: default !important;
+  pointer-events: none;
+  min-height: 88px;
+}
+.skeleton-line {
+  background: linear-gradient(
+    90deg,
+    #1a1d24 0%,
+    #23272f 50%,
+    #1a1d24 100%
+  );
+  background-size: 200% 100%;
+  animation: skeleton-shimmer 1.2s ease-in-out infinite;
+  height: 10px;
+  border-radius: 4px;
+}
+.skeleton-line--sm { width: 30%; }
+.skeleton-line--md { width: 60%; }
+.skeleton-line--lg { width: 85%; }
+@keyframes skeleton-shimmer {
+  0% { background-position: 200% 0; }
+  100% { background-position: -200% 0; }
+}
+
 .session-card {
   background: #13161c;
   border: 1px solid #22262e;
@@ -1733,6 +2013,16 @@ html, body, #root { margin: 0; height: 100%; }
 .synth-modal__pending {
   color: #8a92a0;
   font-style: italic;
+}
+.synth-modal__cursor {
+  display: inline-block;
+  margin-left: 2px;
+  color: #6ea8ff;
+  animation: synth-cursor-blink 0.9s steps(2, end) infinite;
+}
+@keyframes synth-cursor-blink {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0; }
 }
 
 .dashboard__toast {
@@ -2493,6 +2783,56 @@ html, body, #root { margin: 0; height: 100%; }
   color: #e6e6e6;
 }
 
+.output-annotator__batch-bar {
+  position: sticky;
+  bottom: 8px;
+  margin-top: 16px;
+  padding: 10px 14px;
+  background: linear-gradient(90deg, #1b2440 0%, #1e2a4a 100%);
+  border: 1px solid #2a3d70;
+  border-radius: 8px;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  box-shadow: 0 6px 20px rgba(0, 0, 0, 0.35);
+  z-index: 2;
+  animation: batch-bar-in 180ms ease-out;
+}
+@keyframes batch-bar-in {
+  from { transform: translateY(6px); opacity: 0; }
+  to { transform: none; opacity: 1; }
+}
+.output-annotator__batch-count {
+  color: #d3d8e0;
+  font-weight: 600;
+  font-size: 12px;
+  white-space: nowrap;
+}
+.output-annotator__batch-hint {
+  color: #8ea3c7;
+  font-size: 11px;
+  flex: 1;
+}
+.output-annotator__batch-btn {
+  background: #2a6df4 !important;
+  color: white !important;
+  border: none !important;
+  padding: 6px 14px !important;
+  border-radius: 6px !important;
+  font-size: 12px !important;
+  font-weight: 600;
+  cursor: pointer;
+  white-space: nowrap;
+  transition: background 120ms ease;
+}
+.output-annotator__batch-btn:hover:not(:disabled) {
+  background: #1f5de0 !important;
+}
+.output-annotator__batch-btn:disabled {
+  background: #374a7a !important;
+  cursor: default;
+}
+
 .block-card {
   position: relative;
   padding: 4px 28px 4px 8px; /* right padding reserves room for the 💬 button */
@@ -2547,6 +2887,43 @@ html, body, #root { margin: 0; height: 100%; }
 .block-card__body > *:last-child { margin-bottom: 0; }
 
 .block-card__paragraph p { margin: 0; }
+
+.block-card__table {
+  overflow-x: auto;
+  font-size: 12px;
+  line-height: 1.5;
+}
+.block-card__table table {
+  border-collapse: collapse;
+  width: 100%;
+  margin: 0;
+}
+.block-card__table th,
+.block-card__table td {
+  border: 1px solid #22262e;
+  padding: 4px 8px;
+  text-align: left;
+  vertical-align: top;
+  color: #d3d8e0;
+}
+.block-card__table th {
+  background: #15181f;
+  color: #9ab4ff;
+  font-weight: 600;
+}
+.block-card__table tr:nth-child(even) td {
+  background: rgba(255, 255, 255, 0.015);
+}
+/* Row-as-block: hide the repeated header in the visual row, keep it for
+   a11y / screen readers via visually-hidden trick. Simpler: just dim it. */
+.block-card__table--row thead {
+  opacity: 0.45;
+}
+.block-card__table--row thead th {
+  font-size: 10px;
+  padding: 2px 8px;
+  color: #6e7685;
+}
 
 .block-card__heading {
   color: #e6e6e6;
@@ -3461,24 +3838,83 @@ h5.block-card__heading, h6.block-card__heading { font-size: 11px; color: #8a92a0
   outline: none;
   border-color: #3b82f6;
 }
+
+/* Batch prewarm banner — offered when any installed skill has no
+   examples:. One-click kicks off the Sonnet run that fills them in. */
+.skills-tab__prewarm {
+  margin: 0 10px 6px !important;
+  padding: 6px 10px !important;
+  background: rgba(138, 195, 255, 0.06) !important;
+  border: 1px dashed #2a3d70 !important;
+  color: #9ab4ff !important;
+  border-radius: 6px !important;
+  font-size: 11px;
+  cursor: pointer;
+  text-align: left;
+  display: block;
+  width: calc(100% - 20px);
+  transition: background 120ms ease, border-color 120ms ease;
+}
+.skills-tab__prewarm:hover {
+  background: rgba(138, 195, 255, 0.12) !important;
+  border-color: #3d5690 !important;
+}
+.skills-tab__prewarm-status {
+  margin: 0 10px 6px;
+  padding: 6px 10px;
+  background: rgba(138, 195, 255, 0.04);
+  border: 1px solid #2a3d70;
+  border-radius: 6px;
+  color: #9ab4ff;
+  font-size: 11px;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.skills-tab__prewarm-dot {
+  display: inline-block;
+  animation: prewarm-pulse 0.9s ease-in-out infinite;
+  font-size: 16px;
+  line-height: 0.5;
+}
+@keyframes prewarm-pulse {
+  0%, 100% { opacity: 0.3; }
+  50% { opacity: 1; }
+}
+
 .skills-tab__list {
-  flex: 1 1 auto;
+  flex: 1 1 0;
   min-height: 0;
   overflow-y: auto;
   padding: 4px 4px 8px;
 }
+/* TRUSTED SOURCES lives at the bottom of the sidebar. flex-shrink:0
+   keeps it from collapsing when the skill list is long; the body's
+   own max-height + overflow (below) keeps it from pushing the list
+   off-screen when expanded. Without these rules, expanding the
+   section could hide the "+ Add tap…" button behind the viewport
+   edge. */
+.skills-tab__sidebar > .taps-section,
+.skills-tab__sidebar > div:has(.taps-section) {
+  flex: 0 0 auto;
+  border-top: 1px solid rgba(148, 163, 184, 0.08);
+}
 .skills-tab__item {
   display: flex;
-  align-items: flex-start;
+  align-items: center;
   gap: 8px;
-  padding: 8px 10px;
+  padding: 6px 10px;
   border-radius: 6px;
   cursor: pointer;
   transition: background 0.12s ease;
   border-left: 2px solid transparent;
+  position: relative;
 }
 .skills-tab__item:hover {
   background: rgba(255, 255, 255, 0.04);
+}
+.skills-tab__item:hover .skills-tab__delete {
+  opacity: 0.6;
 }
 .skills-tab__item--active {
   background: rgba(59, 130, 246, 0.14);
@@ -3501,6 +3937,14 @@ h5.block-card__heading, h6.block-card__heading { font-size: 11px; color: #8a92a0
   display: flex;
   align-items: center;
   gap: 6px;
+  min-width: 0;
+}
+.skills-tab__slug-text {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  min-width: 0;
+  flex: 1;
 }
 .skills-tab__composite-tag,
 .skills-tab__tap-badge {
@@ -3519,6 +3963,45 @@ h5.block-card__heading, h6.block-card__heading { font-size: 11px; color: #8a92a0
   text-transform: lowercase;
 }
 
+/* Meta-skills (orka-skill-builder etc): pinned at the top of the
+   list with a distinct chip so users can tell "this is Orka's own
+   tool" vs "my own skills". Delete button is also omitted upstream
+   so users can't accidentally nuke a built-in. */
+.skills-tab__item--meta {
+  background: rgba(96, 165, 250, 0.04);
+}
+.skills-tab__item--meta:hover {
+  background: rgba(96, 165, 250, 0.08);
+}
+.skills-tab__item--divider {
+  position: relative;
+}
+.skills-tab__item--divider::after {
+  content: "";
+  position: absolute;
+  left: 10px;
+  right: 10px;
+  bottom: -1px;
+  height: 1px;
+  background: linear-gradient(
+    90deg,
+    transparent,
+    rgba(148, 163, 184, 0.22) 25%,
+    rgba(148, 163, 184, 0.22) 75%,
+    transparent
+  );
+}
+.skills-tab__meta-badge {
+  font-size: 9px;
+  padding: 1px 6px;
+  border-radius: 10px;
+  font-weight: 600;
+  background: rgba(96, 165, 250, 0.22);
+  color: #93c5fd;
+  text-transform: uppercase;
+  letter-spacing: 0.4px;
+}
+
 /* Trusted Taps section — collapsible source list in the Skills sidebar.
    Anchored to the bottom of the sidebar; content scrolls internally if
    it gets tall enough. */
@@ -3529,8 +4012,15 @@ h5.block-card__heading, h6.block-card__heading { font-size: 11px; color: #8a92a0
   max-height: 50%;
   overflow-y: auto;
 }
+/* Header row: toggle (expands to full width) + trailing "+" icon
+   button. The "+" is always visible so users can add a tap even when
+   the section is collapsed or the body scrolled off. */
+.taps-section__header {
+  display: flex;
+  align-items: stretch;
+}
 .taps-section__toggle {
-  width: 100%;
+  flex: 1;
   display: flex;
   align-items: center;
   gap: 6px;
@@ -3544,6 +4034,39 @@ h5.block-card__heading, h6.block-card__heading { font-size: 11px; color: #8a92a0
   text-align: left;
   text-transform: uppercase;
   letter-spacing: 0.6px;
+}
+/* Header-right Add button. Shaped as a compact circular affordance so
+   new users spot it without a label; follows the same idiom as
+   VS Code / Finder / Gmail section-level "add" actions. 22x22 is
+   the sweet spot — big enough to register at a glance, small enough
+   not to crowd the sidebar header.
+   The margin keeps it visually separated from the section title
+   so it doesn't read as part of the label. */
+.taps-section__add-icon {
+  width: 22px;
+  height: 22px;
+  margin: 5px 8px 5px 4px;
+  padding: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  background: #3b82f6;
+  border: none;
+  border-radius: 50%;
+  color: #fff;
+  font-size: 16px;
+  font-weight: 400;
+  line-height: 1;
+  cursor: pointer;
+  flex-shrink: 0;
+  transition: background 120ms ease, transform 120ms ease;
+}
+.taps-section__add-icon:hover {
+  background: #2563eb;
+  transform: scale(1.06);
+}
+.taps-section__add-icon:active {
+  transform: scale(0.96);
 }
 .taps-section__toggle:hover {
   background: rgba(255, 255, 255, 0.03);
@@ -3562,6 +4085,11 @@ h5.block-card__heading, h6.block-card__heading { font-size: 11px; color: #8a92a0
 }
 .taps-section__body {
   padding: 4px 8px 8px;
+  /* Cap the expanded section so a user with 10+ taps doesn't eat the
+     whole sidebar. Scrollable instead — `+ Add tap…` at the bottom
+     stays reachable even with lots of rows above it. */
+  max-height: 40vh;
+  overflow-y: auto;
   display: flex;
   flex-direction: column;
   gap: 4px;
@@ -3571,7 +4099,11 @@ h5.block-card__heading, h6.block-card__heading { font-size: 11px; color: #8a92a0
   font-size: 11px;
   padding: 4px 8px;
 }
+/* DEPRECATED — replaced by .taps-section__add-icon in the header.
+   Kept here so any straggling markup still has a style; delete once
+   the refactor has soaked. */
 .taps-section__add {
+  display: none;
   margin-top: 4px;
   padding: 5px 8px;
   background: transparent;
@@ -3585,6 +4117,183 @@ h5.block-card__heading, h6.block-card__heading { font-size: 11px; color: #8a92a0
 .taps-section__add:hover {
   border-color: rgba(96, 165, 250, 0.4);
   color: #93c5fd;
+}
+
+/* Add-tap modal — replaces the old 3-step promptDialog chain. */
+.tap-modal__overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(5, 7, 12, 0.6);
+  z-index: 1100;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+.tap-modal {
+  width: min(560px, 92vw);
+  max-height: 90vh;
+  overflow-y: auto;
+  background: #11141a;
+  border: 1px solid rgba(148, 163, 184, 0.18);
+  border-radius: 10px;
+  padding: 20px 22px;
+  color: #e2e8f0;
+  box-shadow: 0 20px 60px rgba(0, 0, 0, 0.5);
+}
+.tap-modal__title {
+  font-size: 16px;
+  font-weight: 600;
+  margin-bottom: 4px;
+}
+.tap-modal__sub {
+  font-size: 12px;
+  color: #94a3b8;
+  margin-bottom: 14px;
+  line-height: 1.5;
+}
+.tap-modal__label {
+  display: flex;
+  justify-content: space-between;
+  font-size: 11px;
+  color: #9aa4b3;
+  text-transform: uppercase;
+  letter-spacing: 0.4px;
+  margin: 10px 0 4px;
+}
+.tap-modal__hint {
+  text-transform: none;
+  letter-spacing: normal;
+  color: #6b7280;
+  font-size: 11px;
+}
+.tap-modal__input {
+  width: 100%;
+  padding: 7px 10px;
+  background: rgba(30, 41, 59, 0.5);
+  border: 1px solid rgba(148, 163, 184, 0.2);
+  border-radius: 5px;
+  color: #e2e8f0;
+  font-size: 13px;
+  font-family: ui-monospace, "SF Mono", monospace;
+  box-sizing: border-box;
+}
+.tap-modal__input:focus {
+  outline: none;
+  border-color: rgba(96, 165, 250, 0.5);
+}
+.tap-modal__input--error {
+  border-color: rgba(248, 113, 113, 0.5);
+}
+.tap-modal__err {
+  color: #fca5a5;
+  font-size: 11px;
+  margin-top: 4px;
+}
+.tap-modal__host {
+  color: #86efac;
+  font-size: 11px;
+  margin-top: 4px;
+  font-family: ui-monospace, monospace;
+}
+.tap-modal__grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 10px;
+}
+.tap-modal__test-row {
+  margin-top: 14px;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+.tap-modal__preview {
+  font-size: 12px;
+  color: #86efac;
+}
+.tap-modal__readme {
+  margin-top: 10px;
+  padding: 10px 12px;
+  background: rgba(30, 41, 59, 0.4);
+  border: 1px solid rgba(148, 163, 184, 0.1);
+  border-radius: 6px;
+}
+.tap-modal__readme-label {
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.4px;
+  color: #64748b;
+  margin-bottom: 4px;
+}
+.tap-modal__readme-body {
+  margin: 0;
+  color: #cbd5e1;
+  font-size: 12px;
+  white-space: pre-wrap;
+  font-family: inherit;
+  max-height: 140px;
+  overflow-y: auto;
+}
+.tap-modal__actions {
+  display: flex;
+  gap: 8px;
+  justify-content: flex-end;
+  margin-top: 18px;
+}
+.tap-modal__btn {
+  padding: 7px 14px;
+  font-size: 12px;
+  border-radius: 5px;
+  border: 1px solid transparent;
+  cursor: pointer;
+}
+.tap-modal__btn:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+.tap-modal__btn--primary {
+  background: #3b82f6;
+  color: white;
+}
+.tap-modal__btn--primary:hover:not(:disabled) {
+  background: #2563eb;
+}
+.tap-modal__btn--secondary {
+  background: rgba(148, 163, 184, 0.12);
+  color: #cbd5e1;
+}
+.tap-modal__btn--secondary:hover {
+  background: rgba(148, 163, 184, 0.22);
+}
+.tap-modal__btn--ghost {
+  background: transparent;
+  color: #93c5fd;
+  border-color: rgba(96, 165, 250, 0.25);
+}
+.tap-modal__btn--ghost:hover:not(:disabled) {
+  background: rgba(96, 165, 250, 0.12);
+}
+.tap-modal__notice {
+  background: rgba(96, 165, 250, 0.08);
+  border: 1px solid rgba(96, 165, 250, 0.2);
+  border-radius: 6px;
+  padding: 12px 14px;
+  color: #cbd5e1;
+  font-size: 12px;
+  line-height: 1.55;
+  margin: 10px 0 4px;
+}
+.tap-modal__notice p {
+  margin: 0 0 10px;
+}
+.tap-modal__notice p:last-child {
+  margin-bottom: 0;
+}
+.tap-modal__notice code {
+  background: rgba(148, 163, 184, 0.15);
+  padding: 0 4px;
+  border-radius: 3px;
+  font-size: 11px;
 }
 
 .taps-row {
@@ -3681,8 +4390,11 @@ h5.block-card__heading, h6.block-card__heading { font-size: 11px; color: #8a92a0
 .skills-tab__desc {
   font-size: 11px;
   color: #8a92a0;
-  margin-top: 2px;
-  line-height: 1.4;
+  margin-top: 1px;
+  line-height: 1.35;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 .skills-tab__source {
   font-size: 9px;
@@ -3690,6 +4402,138 @@ h5.block-card__heading, h6.block-card__heading { font-size: 11px; color: #8a92a0
   text-transform: uppercase;
   letter-spacing: 0.5px;
   flex-shrink: 0;
+}
+
+/* Chain-link toggle — only shown for Orka-source skills. When
+   "exposed", the skill has a symlink in ~/.claude/skills/ and is
+   visible to the bare `claude` CLI. Dim when off, brightens when on.
+   Hover-revealed like the delete button to keep the list tidy. */
+.skills-tab__expose {
+  background: transparent !important;
+  border: none !important;
+  padding: 0 !important;
+  width: 20px;
+  height: 20px;
+  line-height: 20px;
+  font-size: 12px;
+  border-radius: 4px !important;
+  cursor: pointer;
+  opacity: 0;
+  transition: opacity 120ms ease, background 120ms ease, filter 120ms ease;
+  flex-shrink: 0;
+  filter: grayscale(100%);
+}
+.skills-tab__item:hover .skills-tab__expose {
+  opacity: 0.5;
+}
+.skills-tab__expose:hover {
+  opacity: 1 !important;
+  background: rgba(138, 195, 255, 0.12) !important;
+}
+.skills-tab__expose--on {
+  opacity: 0.85 !important;
+  filter: none;
+}
+.skills-tab__item:hover .skills-tab__expose--on {
+  opacity: 1;
+}
+
+/* Per-row delete — revealed on hover of the parent .skills-tab__item.
+   Stays invisible by default so the list isn't littered with × marks. */
+.skills-tab__delete {
+  background: transparent !important;
+  border: none !important;
+  color: #8a92a0 !important;
+  padding: 0 !important;
+  width: 20px;
+  height: 20px;
+  line-height: 20px;
+  font-size: 16px;
+  border-radius: 4px !important;
+  cursor: pointer;
+  opacity: 0;
+  transition: opacity 120ms ease, background 120ms ease, color 120ms ease;
+  flex-shrink: 0;
+}
+.skills-tab__delete:hover {
+  opacity: 1 !important;
+  background: rgba(239, 68, 68, 0.15) !important;
+  color: #fca5a5 !important;
+}
+
+/* Header actions (+ and ↻). Grouped so they sit flush-right. */
+.sidebar__header-actions {
+  display: flex;
+  gap: 2px;
+  align-items: center;
+}
+
+/* Add-skill dropdown — unified entry point for create / import / install.
+   Popover anchored to the + ▾ button. Click-outside + Escape close it;
+   the wiring lives in SkillsTab via a useEffect. */
+.skills-tab__add-wrap {
+  position: relative;
+  display: inline-block;
+}
+.skills-tab__add-menu {
+  position: absolute;
+  top: calc(100% + 4px);
+  right: 0;
+  z-index: 20;
+  min-width: 240px;
+  background: #13161c;
+  border: 1px solid #2b3038;
+  border-radius: 8px;
+  box-shadow: 0 10px 28px rgba(0, 0, 0, 0.45);
+  padding: 4px;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  animation: add-menu-in 140ms ease-out;
+}
+@keyframes add-menu-in {
+  from {
+    transform: translateY(-4px);
+    opacity: 0;
+  }
+  to {
+    transform: none;
+    opacity: 1;
+  }
+}
+.skills-tab__add-menu-item {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  padding: 8px 10px;
+  background: transparent !important;
+  border: none !important;
+  border-radius: 5px !important;
+  color: #d3d8e0 !important;
+  font-size: 12px;
+  cursor: pointer;
+  text-align: left;
+  width: 100%;
+  transition: background 100ms ease;
+}
+.skills-tab__add-menu-item:hover {
+  background: rgba(59, 130, 246, 0.14) !important;
+}
+.skills-tab__add-menu-icon {
+  font-size: 14px;
+  line-height: 1.4;
+  flex-shrink: 0;
+}
+.skills-tab__add-menu-label {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  min-width: 0;
+}
+.skills-tab__add-menu-hint {
+  color: #6e7685;
+  font-size: 10px;
+  font-weight: 400;
 }
 
 .skills-tab__runner {
@@ -3753,6 +4597,236 @@ h5.block-card__heading, h6.block-card__heading { font-size: 11px; color: #8a92a0
   margin-top: 6px;
   line-height: 1.5;
 }
+/* Output-folder row: shows where this skill's runs save to. Lets user
+   point runs at a regular filesystem folder so outputs are discoverable
+   by Finder/Spotlight rather than buried in Orka's internal workdir. */
+.skill-runner__output-folder {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-top: 8px;
+  font-size: 11px;
+  color: #9aa4b3;
+}
+.skill-runner__output-folder-label {
+  opacity: 0.7;
+}
+.skill-runner__output-folder-path {
+  color: #cbd5e1;
+  background: rgba(148, 163, 184, 0.08);
+  padding: 1px 6px;
+  border-radius: 4px;
+  font-size: 10px;
+  max-width: 320px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.skill-runner__output-folder-default {
+  color: #6b7280;
+  font-style: italic;
+}
+.skill-runner__output-folder-btn {
+  padding: 1px 8px;
+  font-size: 11px;
+  color: #9ab4ff;
+  background: rgba(96, 165, 250, 0.08);
+  border: 1px solid rgba(96, 165, 250, 0.2);
+  border-radius: 4px;
+  cursor: pointer;
+}
+.skill-runner__output-folder-btn:hover {
+  background: rgba(96, 165, 250, 0.18);
+}
+/* Per-skill schedule list. Shows each schedule's label, timing, and
+   prompt preview so users can manage multiple without drill-downs. */
+.skill-runner__sched-list {
+  margin-top: 14px;
+  padding: 8px 10px;
+  background: rgba(30, 41, 59, 0.35);
+  border: 1px solid rgba(148, 163, 184, 0.12);
+  border-radius: 6px;
+  font-size: 11px;
+}
+.skill-runner__sched-list-head {
+  color: #9ab4ff;
+  font-weight: 600;
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.6px;
+  margin-bottom: 6px;
+  opacity: 0.8;
+}
+.skill-runner__sched-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 4px 0;
+  border-top: 1px dashed rgba(148, 163, 184, 0.1);
+}
+.skill-runner__sched-row:first-of-type {
+  border-top: none;
+}
+.skill-runner__sched-label {
+  color: #cbd5e1;
+  font-weight: 600;
+  min-width: 120px;
+}
+.skill-runner__sched-meta {
+  color: #94a3b8;
+  font-size: 11px;
+}
+.skill-runner__sched-prompt {
+  color: #6b7280;
+  font-style: italic;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  max-width: 240px;
+}
+.skill-runner__sched-spacer {
+  flex: 1;
+}
+.skill-runner__sched-btn {
+  padding: 2px 8px;
+  font-size: 11px;
+  color: #9ab4ff;
+  background: rgba(96, 165, 250, 0.08);
+  border: 1px solid rgba(96, 165, 250, 0.18);
+  border-radius: 4px;
+  cursor: pointer;
+}
+.skill-runner__sched-btn:hover {
+  background: rgba(96, 165, 250, 0.18);
+}
+.skill-runner__sched-btn--danger {
+  color: #fca5a5;
+  background: rgba(248, 113, 113, 0.08);
+  border-color: rgba(248, 113, 113, 0.2);
+}
+.skill-runner__sched-btn--danger:hover {
+  background: rgba(248, 113, 113, 0.18);
+}
+/* Always-visible prompt textarea. The primary way users give context
+   to a skill — structured inputs (below) are optional overrides. */
+.skill-runner__prompt {
+  display: flex;
+  flex-direction: column;
+}
+.skill-runner__prompt-input {
+  background: #0f1218;
+  border: 1px solid #22262e;
+  border-radius: 6px;
+  color: #d3d8e0;
+  padding: 10px 12px;
+  font-size: 13px;
+  line-height: 1.5;
+  font-family: inherit;
+  resize: vertical;
+  min-height: 60px;
+  transition: border-color 120ms ease;
+}
+.skill-runner__prompt-input:focus {
+  outline: none;
+  border-color: #2a6df4;
+}
+.skill-runner__prompt-input::placeholder {
+  color: #5c6473;
+}
+
+/* Clickable example prompts below the textarea. Sourced from the skill's
+   frontmatter `examples:` field. Each chip replaces the textarea's
+   contents on click — cheap "start from a template" UX. */
+.skill-runner__examples {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  align-items: center;
+  margin-top: 6px;
+}
+.skill-runner__examples-label {
+  color: #6e7685;
+  font-size: 10px;
+  letter-spacing: 0.4px;
+  text-transform: uppercase;
+  margin-right: 2px;
+}
+.skill-runner__example-chip {
+  background: rgba(138, 195, 255, 0.06) !important;
+  border: 1px solid #2a3d70 !important;
+  color: #9ab4ff !important;
+  padding: 3px 10px !important;
+  border-radius: 12px !important;
+  font-size: 11px;
+  cursor: pointer;
+  line-height: 1.35;
+  max-width: 420px;
+  text-align: left;
+  transition: background 120ms ease, border-color 120ms ease;
+}
+.skill-runner__example-chip:hover:not(:disabled) {
+  background: rgba(138, 195, 255, 0.12) !important;
+  border-color: #3d5690 !important;
+}
+.skill-runner__example-chip:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+/* Fallback helper row shown below the textarea when a skill has NO
+   declared examples. Gives the user two signals: (1) the box accepts
+   natural language, (2) they can click a button to auto-generate
+   examples and save them to SKILL.md. */
+.skill-runner__prompt-help {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin-top: 6px;
+  color: #8a94a6;
+  font-size: 11px;
+}
+.skill-runner__suggest-btn {
+  background: rgba(138, 195, 255, 0.06) !important;
+  border: 1px solid #2a3d70 !important;
+  color: #9ab4ff !important;
+  padding: 3px 10px !important;
+  border-radius: 12px !important;
+  font-size: 11px;
+  cursor: pointer;
+  transition: background 120ms ease, border-color 120ms ease;
+}
+.skill-runner__suggest-btn:hover:not(:disabled) {
+  background: rgba(138, 195, 255, 0.12) !important;
+  border-color: #3d5690 !important;
+}
+.skill-runner__suggest-btn:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+/* Advanced disclosure — hides the legacy structured-inputs form
+   behind a collapsed toggle so first-time users aren't faced with a
+   rigid form. Expanded on demand for power users. */
+.skill-runner__advanced {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.skill-runner__advanced-toggle {
+  align-self: flex-start;
+  background: transparent !important;
+  border: none !important;
+  color: #8a94a6 !important;
+  padding: 2px 4px !important;
+  font-size: 11px;
+  cursor: pointer;
+  text-align: left;
+}
+.skill-runner__advanced-toggle:hover {
+  color: #c4ccd8 !important;
+}
+
 /* Skill inputs form — rendered between the header and controls when
    the skill declares inputs: in its frontmatter. */
 .skill-runner__inputs {
@@ -4099,6 +5173,194 @@ h5.block-card__heading, h6.block-card__heading { font-size: 11px; color: #8a92a0
   font-size: 16px;
   font-weight: 700;
   color: #e6e8ec;
+}
+.runs-dash__actions {
+  display: flex;
+  gap: 6px;
+  align-items: center;
+}
+.runs-dash__clear {
+  background: transparent !important;
+  border: 1px solid #3a2028 !important;
+  color: #c77a7a !important;
+  padding: 3px 10px !important;
+  border-radius: 6px !important;
+  font-size: 12px;
+  cursor: pointer;
+  transition: background 120ms ease, border-color 120ms ease;
+}
+.runs-dash__clear:hover:not(:disabled) {
+  background: rgba(199, 122, 122, 0.08) !important;
+  border-color: #5a2830 !important;
+}
+.runs-dash__clear:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+/* Runs row → Sessions tab nav. Clickable rows show a subtle hover
+   + a chip next to the skill name so users know there's a target
+   before clicking. Chip hidden for rows whose session wasn't
+   captured (pre-session-id history). */
+.runs-dash__row--clickable {
+  cursor: pointer;
+  transition: background 100ms ease;
+}
+.runs-dash__row--clickable:hover {
+  background: rgba(96, 165, 250, 0.06);
+}
+.runs-dash__session-chip {
+  margin-left: 8px;
+  padding: 1px 7px;
+  font-size: 10px;
+  color: #9ab4ff;
+  background: rgba(96, 165, 250, 0.12);
+  border-radius: 10px;
+  letter-spacing: 0.2px;
+}
+.runs-dash__term-btn {
+  margin-left: 6px;
+  padding: 2px 8px;
+  font-size: 11px;
+  color: #cbd5e1;
+  background: rgba(148, 163, 184, 0.1);
+  border: 1px solid rgba(148, 163, 184, 0.25);
+  border-radius: 10px;
+  cursor: pointer;
+  letter-spacing: 0.2px;
+  transition: background 0.12s ease;
+}
+.runs-dash__term-btn:hover {
+  background: rgba(148, 163, 184, 0.22);
+  color: #f1f5f9;
+}
+
+/* Right-side drawer opened from Runs tab for reviewing + annotating
+   past runs. Slides over the table without leaving the tab. */
+.run-drawer__overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(5, 7, 12, 0.55);
+  z-index: 1000;
+  display: flex;
+  justify-content: flex-end;
+}
+.run-drawer {
+  width: min(920px, 95vw);
+  height: 100%;
+  background: #11141a;
+  border-left: 1px solid rgba(148, 163, 184, 0.15);
+  box-shadow: -20px 0 40px rgba(0, 0, 0, 0.45);
+  display: flex;
+  flex-direction: column;
+  animation: run-drawer-slide 160ms ease-out;
+}
+@keyframes run-drawer-slide {
+  from { transform: translateX(30px); opacity: 0; }
+  to   { transform: translateX(0);    opacity: 1; }
+}
+.run-drawer__header {
+  display: flex;
+  align-items: center;
+  padding: 14px 18px;
+  border-bottom: 1px solid rgba(148, 163, 184, 0.12);
+}
+.run-drawer__title {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex: 1;
+  min-width: 0;
+}
+.run-drawer__skill {
+  font-size: 15px;
+  font-weight: 600;
+  color: #e2e8f0;
+}
+.run-drawer__time {
+  font-size: 12px;
+  color: #8a92a0;
+}
+.run-drawer__status {
+  font-size: 11px;
+  padding: 1px 8px;
+  border-radius: 10px;
+  letter-spacing: 0.3px;
+}
+.run-drawer__status--ok {
+  color: #86efac;
+  background: rgba(34, 197, 94, 0.12);
+}
+.run-drawer__status--error {
+  color: #fca5a5;
+  background: rgba(248, 113, 113, 0.12);
+}
+.run-drawer__trigger {
+  font-size: 11px;
+  color: #6b7280;
+}
+.run-drawer__close {
+  background: none;
+  border: none;
+  color: #9aa4b3;
+  font-size: 22px;
+  cursor: pointer;
+  padding: 0 4px;
+}
+.run-drawer__close:hover {
+  color: #f1f5f9;
+}
+.run-drawer__meta {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 18px;
+  border-bottom: 1px solid rgba(148, 163, 184, 0.08);
+  font-size: 12px;
+  color: #94a3b8;
+}
+.run-drawer__meta-item {
+  background: rgba(148, 163, 184, 0.08);
+  padding: 2px 8px;
+  border-radius: 4px;
+}
+.run-drawer__meta-item--warn {
+  color: #fcd34d;
+  background: rgba(234, 179, 8, 0.1);
+}
+.run-drawer__meta-spacer {
+  flex: 1;
+}
+.run-drawer__action {
+  padding: 3px 10px;
+  font-size: 11px;
+  color: #9ab4ff;
+  background: rgba(96, 165, 250, 0.1);
+  border: 1px solid rgba(96, 165, 250, 0.2);
+  border-radius: 4px;
+  cursor: pointer;
+}
+.run-drawer__action:hover {
+  background: rgba(96, 165, 250, 0.2);
+}
+.run-drawer__body {
+  flex: 1;
+  overflow-y: auto;
+  padding: 16px 18px;
+}
+.run-drawer__error {
+  color: #fca5a5;
+  background: rgba(248, 113, 113, 0.1);
+  padding: 10px 14px;
+  border-radius: 6px;
+  margin-bottom: 10px;
+}
+.run-drawer__empty {
+  color: #6b7280;
+  font-style: italic;
+  padding: 40px 20px;
+  text-align: center;
+  line-height: 1.6;
 }
 .runs-dash__status {
   color: #8a93a1;

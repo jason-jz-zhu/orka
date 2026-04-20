@@ -8,7 +8,25 @@ import {
   saveProfile,
   testWeworkWebhook,
 } from "../lib/destinations";
-import { confirmDialog } from "../lib/dialogs";
+import { alertDialog, confirmDialog } from "../lib/dialogs";
+
+/** Platform detection via `navigator.platform`. Tauri's webview
+ *  inherits this from the host OS. macOS-only destinations (Apple
+ *  Notes, iCloud Drive) are hidden on Linux/Windows to avoid
+ *  promising features that silently no-op. */
+function isMac(): boolean {
+  if (typeof navigator === "undefined") return false;
+  const p = navigator.platform || "";
+  return p.toLowerCase().includes("mac");
+}
+import {
+  type TerminalConfig,
+  type TerminalPreference,
+  TERMINAL_LABEL,
+  detectAvailableTerminals,
+  getTerminalConfig,
+  setTerminalConfig,
+} from "../lib/terminal-config";
 
 type Props = { onClose: () => void };
 
@@ -82,9 +100,14 @@ function SettingsHome({
 
       <div className="settings__section-label">🌟 Always available</div>
       <div className="settings__static">
-        <div>📁 Local folder · 📱 iCloud Drive · 📝 Apple Notes</div>
+        <div>
+          📁 Local folder
+          {isMac() && " · 📱 iCloud Drive · 📝 Apple Notes"}
+        </div>
         <div className="settings__static-hint">
-          No setup. Pick directly from the Output node's "send to" dropdown.
+          {isMac()
+            ? "No setup. Pick directly from the Output node's \"send to\" dropdown."
+            : "Apple Notes and iCloud destinations are macOS-only. Local folder works everywhere."}
         </div>
       </div>
 
@@ -113,6 +136,8 @@ function SettingsHome({
         </div>
       ))}
 
+      <TerminalSection />
+
       <div className="settings__section-label">➕ Add destination</div>
       <div className="settings__add-grid">
         <button className="settings__add-card" onClick={onAddWeChat}>
@@ -137,6 +162,130 @@ function SettingsHome({
           Done
         </button>
       </div>
+    </>
+  );
+}
+
+function TerminalSection() {
+  const [cfg, setCfg] = useState<TerminalConfig | null>(null);
+  const [available, setAvailable] = useState<string[]>([]);
+  const [saving, setSaving] = useState(false);
+  const [savedAt, setSavedAt] = useState<number | null>(null);
+
+  useEffect(() => {
+    (async () => {
+      try {
+        const [c, a] = await Promise.all([
+          getTerminalConfig(),
+          detectAvailableTerminals(),
+        ]);
+        setCfg(c);
+        setAvailable(a);
+      } catch {
+        setCfg({ preference: "auto", custom_template: null });
+      }
+    })();
+  }, []);
+
+  async function update(patch: Partial<TerminalConfig>) {
+    if (!cfg) return;
+    const next = { ...cfg, ...patch };
+    setCfg(next);
+    setSaving(true);
+    try {
+      await setTerminalConfig(next);
+      setSavedAt(Date.now());
+    } catch (e) {
+      // Silently dropping config-write errors caused a "my settings
+      // aren't saving" class of bug with no in-app signal. Surface
+      // the error — users can retry, report, or fix permissions.
+      void alertDialog(`Couldn't save terminal settings: ${e}`);
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  if (!cfg) return null;
+
+  const options: TerminalPreference[] = [
+    "auto",
+    "terminal-app",
+    "iterm",
+    "warp",
+    "vscode",
+    "custom",
+  ];
+
+  return (
+    <>
+      <div className="settings__section-label">⌨️ Terminal</div>
+      <div className="settings__sub" style={{ marginBottom: 10 }}>
+        Which terminal to open when you click "⌨ Terminal" on a Run row. The
+        command pre-fills with <code>claude --resume &lt;session&gt;</code> in
+        the run's working directory.
+      </div>
+      <div style={{ display: "grid", gap: 6, marginBottom: 10 }}>
+        {options.map((opt) => {
+          const isAvailable =
+            opt === "auto" ||
+            opt === "custom" ||
+            available.includes(opt);
+          const checked = cfg.preference === opt;
+          return (
+            <label
+              key={opt}
+              style={{
+                display: "flex",
+                alignItems: "center",
+                gap: 8,
+                opacity: isAvailable ? 1 : 0.5,
+                cursor: isAvailable ? "pointer" : "not-allowed",
+              }}
+            >
+              <input
+                type="radio"
+                name="term-pref"
+                checked={checked}
+                disabled={!isAvailable}
+                onChange={() => void update({ preference: opt })}
+              />
+              <span>{TERMINAL_LABEL[opt]}</span>
+              {!isAvailable && (
+                <span className="settings__static-hint">(not detected)</span>
+              )}
+              {opt === "auto" && available.length > 0 && (
+                <span className="settings__static-hint">
+                  → {available[0]}
+                </span>
+              )}
+            </label>
+          );
+        })}
+      </div>
+      {cfg.preference === "custom" && (
+        <div style={{ marginBottom: 8 }}>
+          <label className="settings__label">Custom command template</label>
+          <textarea
+            className="settings__input"
+            rows={3}
+            placeholder="alacritty -e bash -c 'cd {cwd} && {cmd}'"
+            value={cfg.custom_template ?? ""}
+            onChange={(e) => void update({ custom_template: e.target.value })}
+          />
+          <div className="settings__hint">
+            Variables:{" "}
+            <code>{"{cwd}"}</code> · <code>{"{cmd}"}</code> ·{" "}
+            <code>{"{sid}"}</code>. Runs through <code>sh -c</code>. Unknown
+            placeholders stay literal.
+          </div>
+        </div>
+      )}
+      {saving && (
+        <div className="settings__static-hint">Saving…</div>
+      )}
+      {!saving && savedAt !== null && (
+        <div className="settings__static-hint">✓ Saved</div>
+      )}
     </>
   );
 }

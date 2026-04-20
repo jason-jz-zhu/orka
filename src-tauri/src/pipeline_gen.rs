@@ -140,6 +140,23 @@ fn validate(p: &GeneratedPipeline) -> Result<(), String> {
 }
 
 async fn run_claude_capturing(prompt: &str) -> Result<String, String> {
+    // Pre-flight: surface the onboarding-style guidance if the CLI
+    // isn't installed, instead of a generic "spawn claude failed"
+    // from Command::spawn. Users who skipped onboarding still get
+    // an actionable message.
+    let (installed, _version) = {
+        // Re-use the shared detection so we pick up every Homebrew /
+        // nvm / asdf install path covered by onboarding::detect_claude_cli.
+        // The detector caches positives, so repeat calls are free.
+        let status = crate::onboarding::onboarding_status();
+        (status.claude_installed, status.claude_version)
+    };
+    if !installed {
+        return Err(
+            "The `claude` CLI isn't installed or isn't on your PATH. Install it from https://docs.claude.com/en/docs/claude-code, then reopen Orka.".into(),
+        );
+    }
+
     let mut child = Command::new("claude")
         .args(["-p", prompt])
         .stdout(Stdio::piped())

@@ -1,10 +1,12 @@
 [package]
 name = "orka"
 version = "0.1.0"
-description = "A Tauri App"
-authors = ["you"]
+description = "Canvas-based orchestrator for the Claude CLI — build, schedule, and observe skill runs"
+authors = ["Orka contributors"]
 edition = "2021"
 default-run = "orka"
+license = "MIT"
+repository = "https://github.com/jasonjzhu/orka"
 
 [lib]
 name = "orka_lib"
@@ -13,6 +15,10 @@ crate-type = ["staticlib", "cdylib", "rlib"]
 [[bin]]
 name = "orka-cli"
 path = "src/bin/orka.rs"
+
+[[bin]]
+name = "orka-perf"
+path = "src/bin/perf_bench.rs"
 
 [build-dependencies]
 tauri-build = { version = "2", features = [] }

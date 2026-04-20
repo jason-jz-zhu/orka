@@ -1,8 +1,7 @@
 use clap::{Parser, Subcommand};
-use sha2::{Digest, Sha256};
-use std::collections::HashMap;
-use std::path::PathBuf;
 use std::process::Command;
+
+use orka_lib::skill_trust::{cli_check_and_record, CliTrustOutcome};
 
 #[derive(Parser)]
 #[command(name = "orka", about = "Orka CLI — run skills from the command line")]
@@ -47,103 +46,17 @@ fn main() {
     }
 }
 
-// ============================================================================
-// SKILL.md trust (TOFU hash pinning)
-//
-// Threat: a teammate's git-sync or a compromised editor rewrites
-// ~/.claude/skills/<slug>/SKILL.md to exfiltrate files on the next cron-
-// scheduled run. Orka wouldn't know until the damage is done.
-//
-// Mitigation: on first run of a skill, snapshot its SHA-256 and persist to
-// ~/OrkaCanvas/.trusted-skills.json. On subsequent runs, re-hash and refuse
-// execution if it doesn't match — unless the user passes --trust to
-// explicitly accept the change.
-// ============================================================================
-
-fn trust_store_path() -> Option<PathBuf> {
-    dirs::home_dir().map(|h| h.join("OrkaCanvas").join(".trusted-skills.json"))
-}
-
-fn load_trust_store() -> HashMap<String, String> {
-    let Some(path) = trust_store_path() else { return HashMap::new() };
-    match std::fs::read_to_string(&path) {
-        Ok(s) => serde_json::from_str(&s).unwrap_or_default(),
-        Err(_) => HashMap::new(),
-    }
-}
-
-fn save_trust_store(store: &HashMap<String, String>) {
-    let Some(path) = trust_store_path() else { return };
-    if let Some(parent) = path.parent() {
-        let _ = std::fs::create_dir_all(parent);
-    }
-    if let Ok(json) = serde_json::to_string_pretty(store) {
-        let tmp = path.with_extension("json.tmp");
-        if std::fs::write(&tmp, json).is_ok() {
-            let _ = std::fs::rename(&tmp, &path);
-        }
-    }
-}
-
-fn hash_skill_md(path: &std::path::Path) -> Option<String> {
-    let bytes = std::fs::read(path).ok()?;
-    let mut hasher = Sha256::new();
-    hasher.update(&bytes);
-    Some(format!("{:x}", hasher.finalize()))
-}
-
-/// Resolve a skill slug to its SKILL.md path.
-fn resolve_skill_md(slug: &str) -> Option<PathBuf> {
-    orka_lib::skill_md::list_skill_dirs()
-        .into_iter()
-        .find(|(s, _)| s == slug)
-        .map(|(_, path)| PathBuf::from(path).join("SKILL.md"))
-}
-
-/// Check SKILL.md against the trust store. Returns Ok(()) to proceed,
-/// Err(msg) to abort. On first run (TOFU), silently records the hash.
-/// With `accept_change`, updates the stored hash to the current one.
-fn check_skill_trust(slug: &str, accept_change: bool, quiet: bool) -> Result<(), String> {
-    let md_path = match resolve_skill_md(slug) {
-        Some(p) => p,
-        None => return Err(format!("skill '{slug}' not found in ~/.claude/skills/")),
-    };
-    let current_hash = hash_skill_md(&md_path)
-        .ok_or_else(|| format!("could not read {}", md_path.display()))?;
-    let mut store = load_trust_store();
-    match store.get(slug) {
-        Some(known) if *known == current_hash => Ok(()),
-        Some(_) if accept_change => {
-            store.insert(slug.to_string(), current_hash);
-            save_trust_store(&store);
-            if !quiet {
-                eprintln!("[orka] accepted new hash for skill '{slug}' and updated trust record");
-            }
-            Ok(())
-        }
-        Some(_) => Err(format!(
-            "SKILL.md for '{slug}' has changed since the last trusted run.\n\
-             Review the changes, then re-run with --trust to approve:\n\
-             \n    orka run {slug} --trust\n\
-             \nSee {}",
-            md_path.display()
-        )),
-        None => {
-            // TOFU: first time running this skill. Record its hash.
-            store.insert(slug.to_string(), current_hash);
-            save_trust_store(&store);
-            if !quiet {
-                eprintln!("[orka] trusting skill '{slug}' on first use (TOFU)");
-            }
-            Ok(())
-        }
-    }
-}
+// SKILL.md trust (TOFU hash pinning) lives in orka_lib::skill_trust so
+// the Tauri app and this CLI share one source of truth for the trust
+// store shape + semantics. See that module's docs for the threat model.
 
 fn run_skill(slug: &str, inputs: &[String], json: bool, quiet: bool, trust: bool) {
-    if let Err(e) = check_skill_trust(slug, trust, quiet) {
-        eprintln!("[orka] {e}");
-        std::process::exit(2);
+    match cli_check_and_record(slug, trust, quiet) {
+        CliTrustOutcome::Proceed => {}
+        CliTrustOutcome::Refuse(msg) => {
+            eprintln!("[orka] {msg}");
+            std::process::exit(2);
+        }
     }
 
     let mut prompt = format!("/{slug}");
