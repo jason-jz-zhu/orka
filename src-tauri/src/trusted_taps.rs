@@ -225,6 +225,7 @@ pub async fn install_tap(id: String) -> Result<u32, String> {
         .map_err(|e| format!("mkdir claude skills: {e}"))?;
 
     let linked = link_tap_skills(&id, &clone_dir, &skills_root)?;
+    crate::skills::invalidate_skills_cache();
     Ok(linked)
 }
 
@@ -348,6 +349,7 @@ pub async fn uninstall_tap(id: String) -> Result<u32, String> {
             .map_err(|e| format!("remove clone: {e}"))?;
     }
 
+    crate::skills::invalidate_skills_cache();
     Ok(removed)
 }
 
@@ -371,8 +373,16 @@ pub async fn add_custom_tap(
     if current.iter().any(|t| t.id == id) {
         return Err(format!("tap '{id}' already added"));
     }
-    if !(url.starts_with("https://") || url.starts_with("http://") || url.starts_with("git@")) {
-        return Err("url must start with https://, http:// or git@".into());
+    // Reject bare HTTP — skill taps are clone-targets, and an
+    // unencrypted fetch lets a network attacker inject arbitrary
+    // SKILL.md content (which can include malicious prompts,
+    // shell-invoking frontmatter, etc.) before the TOFU hash pins.
+    // HTTPS gives us transport integrity; git@ uses SSH which
+    // relies on known_hosts. Everything else is a nope.
+    if !(url.starts_with("https://") || url.starts_with("git@")) {
+        return Err(
+            "tap url must use https:// or git@ (SSH). Plain http:// is rejected because a network attacker could tamper with the skill source before trust is established.".into(),
+        );
     }
     current.push(Tap {
         id,
@@ -395,6 +405,143 @@ pub async fn remove_custom_tap(id: String) -> Result<(), String> {
         return Err(format!("custom tap '{id}' not found"));
     }
     save_custom_taps(&current)
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TapPreview {
+    pub skill_count: u32,
+    /// Slugs of skills found in the tap. Capped to 20 to keep the
+    /// modal's scrollback reasonable; `skill_count` carries the
+    /// total for display ("+3 more…").
+    pub skill_names: Vec<String>,
+    pub readme_excerpt: Option<String>,
+}
+
+/// Shallow-clone a tap URL into a temp dir and report what's inside,
+/// without adding it to the user's tap list. Called from the Add-tap
+/// modal's "Test" button so users can verify they typed a real repo
+/// before committing. Also catches mistakes like
+/// "wrong-user/wrong-repo" (git clone 404) before the list picks it up.
+///
+/// The preview dir lives under ~/.orka/taps/.preview/<random>/ and
+/// gets GC'd opportunistically — any entry older than the TTL is
+/// wiped when this function runs. Not a disk emergency even if GC
+/// never runs: a failed clone leaves only the empty dir, and even a
+/// successful one shallow-clones ~1MB.
+#[tauri::command]
+pub async fn preview_tap(url: String) -> Result<TapPreview, String> {
+    if !(url.starts_with("https://") || url.starts_with("git@")) {
+        return Err(
+            "URL must use https:// or git@ (SSH). Plain http:// is rejected.".into(),
+        );
+    }
+
+    let root = taps_root().ok_or("no home dir")?;
+    let preview_root = root.join(".preview");
+    tokio::fs::create_dir_all(&preview_root)
+        .await
+        .map_err(|e| format!("mkdir preview: {e}"))?;
+
+    gc_preview_dirs(&preview_root).await;
+
+    // Random-ish dir name. Don't need cryptographic randomness —
+    // process id + nanos is collision-proof for our throughput.
+    let nonce = format!(
+        "{}-{}",
+        std::process::id(),
+        chrono::Utc::now().timestamp_nanos_opt().unwrap_or(0)
+    );
+    let clone_dir = preview_root.join(&nonce);
+
+    let output = tokio::process::Command::new("git")
+        .args([
+            "clone",
+            "--depth",
+            "1",
+            "--single-branch",
+            &url,
+            clone_dir.to_str().ok_or("bad path")?,
+        ])
+        .output()
+        .await
+        .map_err(|e| format!("spawn git: {e} (is git installed?)"))?;
+
+    if !output.status.success() {
+        // Best-effort cleanup on failure — an empty dir can linger
+        // but the GC will sweep it next round.
+        let _ = tokio::fs::remove_dir_all(&clone_dir).await;
+        let err = String::from_utf8_lossy(&output.stderr);
+        return Err(format!(
+            "git clone failed: {}",
+            err.trim().replace('\n', " "),
+        ));
+    }
+
+    // Scan for SKILL.md-bearing directories.
+    let mut names = Vec::new();
+    if let Ok(rd) = std::fs::read_dir(&clone_dir) {
+        for entry in rd.flatten() {
+            let p = entry.path();
+            if !p.is_dir() { continue; }
+            if !p.join("SKILL.md").is_file() { continue; }
+            if let Some(n) = p.file_name().and_then(|n| n.to_str()) {
+                if !n.starts_with('.') {
+                    names.push(n.to_string());
+                }
+            }
+        }
+    }
+    names.sort();
+    let total = names.len() as u32;
+    let capped: Vec<String> = names.into_iter().take(20).collect();
+
+    // Grab a README snippet if any for the modal's summary panel.
+    let readme_excerpt = std::fs::read_to_string(clone_dir.join("README.md"))
+        .ok()
+        .or_else(|| std::fs::read_to_string(clone_dir.join("readme.md")).ok())
+        .map(|s| {
+            // Drop the trailing newline + cap at ~280 chars. Markdown
+            // intact — the UI renders plaintext only.
+            let trimmed = s.trim();
+            if trimmed.chars().count() <= 280 {
+                trimmed.to_string()
+            } else {
+                let mut out: String = trimmed.chars().take(280).collect();
+                out.push('…');
+                out
+            }
+        });
+
+    // Keep the preview dir around briefly so a user who immediately
+    // hits "Install" doesn't pay for a second clone. GC cleans it up
+    // on the next preview call.
+
+    Ok(TapPreview {
+        skill_count: total,
+        skill_names: capped,
+        readme_excerpt,
+    })
+}
+
+/// Remove preview directories older than 10 minutes. Called before
+/// each preview; self-cleaning so orphaned clones from crashes or
+/// force-quit don't accumulate indefinitely in `~/.orka/taps/.preview/`.
+async fn gc_preview_dirs(preview_root: &Path) {
+    const TTL_MS: u64 = 10 * 60 * 1000;
+    let Ok(rd) = tokio::fs::read_dir(preview_root).await else { return; };
+    let mut rd = rd;
+    let now = std::time::SystemTime::now();
+    while let Ok(Some(entry)) = rd.next_entry().await {
+        let Ok(meta) = entry.metadata().await else { continue };
+        let Ok(mtime) = meta.modified() else { continue };
+        let age = now
+            .duration_since(mtime)
+            .map(|d| d.as_millis() as u64)
+            .unwrap_or(0);
+        if age > TTL_MS {
+            let _ = tokio::fs::remove_dir_all(entry.path()).await;
+        }
+    }
 }
 
 #[cfg(test)]
@@ -421,5 +568,48 @@ mod tests {
     fn builtin_gstack_present() {
         let taps = builtin_taps();
         assert!(taps.iter().any(|t| t.id == "gstack"));
+    }
+
+    // ---------- preview_tap tests ----------
+
+    #[tokio::test]
+    async fn harness_preview_rejects_plain_http() {
+        // Can't actually clone in a unit test (no network, no git
+        // permission, no time). But the URL-scheme check runs first,
+        // so this guard exercises the real code path without any
+        // subprocess.
+        let r = preview_tap("http://example.com/repo".into()).await;
+        assert!(r.is_err());
+        assert!(
+            r.unwrap_err().to_lowercase().contains("http"),
+            "expected a scheme-related error"
+        );
+    }
+
+    #[tokio::test]
+    async fn harness_preview_rejects_empty_url() {
+        let r = preview_tap("".into()).await;
+        assert!(r.is_err());
+    }
+
+    #[tokio::test]
+    async fn harness_preview_rejects_ftp() {
+        let r = preview_tap("ftp://evil.example/repo".into()).await;
+        assert!(r.is_err());
+    }
+
+    #[test]
+    fn harness_tap_preview_serializes_cleanly() {
+        // Contract test: keep the JSON shape stable so the frontend
+        // doesn't break when serde field names shift.
+        let preview = TapPreview {
+            skill_count: 3,
+            skill_names: vec!["a".into(), "b".into()],
+            readme_excerpt: Some("hello".into()),
+        };
+        let json = serde_json::to_string(&preview).unwrap();
+        assert!(json.contains("skill_count"));
+        assert!(json.contains("skill_names"));
+        assert!(json.contains("readme_excerpt"));
     }
 }

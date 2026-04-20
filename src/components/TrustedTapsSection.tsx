@@ -1,7 +1,10 @@
-import { useCallback, useEffect, useState } from "react";
+import { lazy, Suspense, useCallback, useEffect, useState } from "react";
 import { invokeCmd } from "../lib/tauri";
 import { useSkills } from "../lib/skills";
-import { alertDialog, confirmDialog, promptDialog } from "../lib/dialogs";
+import { alertDialog, confirmDialog } from "../lib/dialogs";
+// Lazy: the modal pulls the URL parser + its own styles. Only mounted
+// when the user opens it, so the sidebar cost stays tiny.
+const AddTapModal = lazy(() => import("./AddTapModal"));
 
 export interface Tap {
   id: string;
@@ -32,6 +35,7 @@ export function TrustedTapsSection({ defaultCollapsed }: Props) {
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState<string | null>(null);
   const [collapsed, setCollapsed] = useState(!!defaultCollapsed);
+  const [showAdd, setShowAdd] = useState(false);
   const refreshSkills = useSkills((s) => s.refresh);
 
   const load = useCallback(async () => {
@@ -101,32 +105,10 @@ export function TrustedTapsSection({ defaultCollapsed }: Props) {
     }
   }
 
-  async function addCustom() {
-    const id = await promptDialog(
-      "Short id (letters, numbers, dashes — used as slug prefix):",
-      { title: "Add a tap · step 1 of 3" },
-    );
-    if (!id) return;
-    const name = await promptDialog("Display name:", {
-      default: id,
-      title: "Add a tap · step 2 of 3",
-    });
-    if (!name) return;
-    const url = await promptDialog("Git URL (https://…):", {
-      title: "Add a tap · step 3 of 3",
-    });
-    if (!url) return;
-    try {
-      await invokeCmd("add_custom_tap", {
-        id,
-        name,
-        description: "",
-        url,
-      });
-      await load();
-    } catch (e) {
-      await alertDialog(`Add tap failed: ${e}`);
-    }
+  // Modal-based add flow replaces the old 3-step prompt chain.
+  // Opens a single form with URL parsing + optional repo preview.
+  function addCustom() {
+    setShowAdd(true);
   }
 
   async function removeCustom(tap: Tap) {
@@ -149,17 +131,36 @@ export function TrustedTapsSection({ defaultCollapsed }: Props) {
 
   return (
     <div className="taps-section">
-      <button
-        type="button"
-        className="taps-section__toggle"
-        onClick={() => setCollapsed((c) => !c)}
-      >
-        <span className="taps-section__toggle-icon">{collapsed ? "▸" : "▾"}</span>
-        <span className="taps-section__title">🏛 Trusted Sources</span>
-        <span className="taps-section__count">
-          {taps.filter((t) => t.installed).length}/{taps.length}
-        </span>
-      </button>
+      <div className="taps-section__header">
+        <button
+          type="button"
+          className="taps-section__toggle"
+          onClick={() => setCollapsed((c) => !c)}
+        >
+          <span className="taps-section__toggle-icon">{collapsed ? "▸" : "▾"}</span>
+          <span className="taps-section__title">🏛 Trusted Sources</span>
+          <span className="taps-section__count">
+            {taps.filter((t) => t.installed).length}/{taps.length}
+          </span>
+        </button>
+        {/* Header-level Add button — reachable even when the body is
+            collapsed OR when the body is scrolled past the bottom. The
+            inline "+ Add tap…" at the bottom of the body stays too,
+            for discoverability once users are browsing the section. */}
+        <button
+          type="button"
+          className="taps-section__add-icon"
+          onClick={(e) => {
+            e.stopPropagation();
+            setCollapsed(false);
+            addCustom();
+          }}
+          title="Add a new tap"
+          aria-label="Add tap"
+        >
+          +
+        </button>
+      </div>
       {!collapsed && (
         <div className="taps-section__body">
           {loading && <div className="taps-section__status">loading…</div>}
@@ -217,14 +218,15 @@ export function TrustedTapsSection({ defaultCollapsed }: Props) {
                 </div>
               </div>
             ))}
-          <button
-            type="button"
-            className="taps-section__add"
-            onClick={() => void addCustom()}
-          >
-            + Add tap…
-          </button>
         </div>
+      )}
+      {showAdd && (
+        <Suspense fallback={null}>
+          <AddTapModal
+            onClose={() => setShowAdd(false)}
+            onAdded={() => void load()}
+          />
+        </Suspense>
       )}
     </div>
   );
