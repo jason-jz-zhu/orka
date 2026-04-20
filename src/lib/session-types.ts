@@ -27,6 +27,7 @@ export type SessionInfo = {
   first_user_preview: string | null;
   last_message_preview: string | null;
   last_user_preview: string | null;
+  spawn_label: string | null;
   status: SessionStatus;
   turn_count: number;
   awaiting_user: boolean;

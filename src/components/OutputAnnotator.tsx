@@ -58,34 +58,75 @@ export function OutputAnnotator({
     };
   }
 
+  // All user notes queue silently — no per-block AI call. The batched
+  // "Ask Claude with all notes" button below ships them together.
   async function handleAddNote(block: Block, text: string) {
     await appendMessage(runId, blockInfo(block), { author: "you", text });
     await maybeSyncToNotes(block);
   }
 
-  async function handleAskClaude(block: Block, text: string) {
-    // Record the user's question immediately.
-    await appendMessage(runId, blockInfo(block), { author: "you", text });
-    await maybeSyncToNotes(block);
+  // A pending block is one whose thread has at least one trailing user
+  // note without a subsequent Claude reply. These are the blocks the
+  // batched ask will address.
+  const pendingBlocks = useMemo(() => {
+    const out: Array<{ block: Block; unanswered: string[] }> = [];
+    for (const block of blocks) {
+      const a = annotations.get(blockHash(block));
+      if (!a || a.thread.length === 0) continue;
+      // Walk backwards collecting user notes until we hit a claude reply
+      // (those earlier notes have already been addressed).
+      const unanswered: string[] = [];
+      for (let i = a.thread.length - 1; i >= 0; i--) {
+        const m = a.thread[i];
+        if (m.author === "claude") break;
+        if (m.author === "you") unanswered.unshift(m.text);
+      }
+      if (unanswered.length > 0) out.push({ block, unanswered });
+    }
+    return out;
+  }, [blocks, annotations]);
 
-    // Run a one-shot `claude -p` with the same session id so Claude
-    // sees the full run transcript as context, plus our new question.
-    await askClaudeAboutBlock(block, text);
-  }
+  const [batchAsking, setBatchAsking] = useState(false);
 
-  async function askClaudeAboutBlock(block: Block, userText: string) {
+  async function handleAskAll() {
+    if (pendingBlocks.length === 0 || batchAsking) return;
     if (!sessionId) {
       await alertDialog(
         "Can't ask Claude: this output was produced before session tracking was enabled. Run the skill again to use Ask Claude.",
       );
       return;
     }
+    setBatchAsking(true);
+    try {
+      const prompt = composeBatchPrompt(pendingBlocks);
+      const reply = await runOneShotClaude(
+        `annot-${runId}-batch-${Date.now()}`,
+        prompt,
+        sessionId,
+      );
+      if (reply) {
+        // Append the same unified reply to every pending block's thread
+        // so each card the user annotated shows Claude's response.
+        for (const { block } of pendingBlocks) {
+          await appendMessage(runId, blockInfo(block), {
+            author: "claude",
+            text: reply,
+          });
+          await maybeSyncToNotes(block);
+        }
+      }
+    } catch (e) {
+      await alertDialog(`Ask Claude failed: ${e}`);
+    } finally {
+      setBatchAsking(false);
+    }
+  }
 
-    // Isolated subprocess id so we don't collide with the source node's
-    // event stream. The annotator subscribes to this id's events only.
-    const subId = `annot-${runId}-${block.idx}-${Date.now()}`;
-    const prompt = composeFollowUpPrompt(block, userText);
-
+  async function runOneShotClaude(
+    subId: string,
+    prompt: string,
+    resumeId: string,
+  ): Promise<string> {
     let buf = "";
     const unlistenStream = await listenEvent<string>(
       `node:${subId}:stream`,
@@ -105,36 +146,28 @@ export function OutputAnnotator({
         doneRef.fn = fn;
       });
     });
-
     try {
       await invokeCmd("run_agent_node", {
         id: subId,
         prompt,
-        resumeId: sessionId,
+        resumeId,
         addDirs: [],
         allowedTools: null,
+        // Reuse the source run's workdir so `--resume` can find the
+        // session. claude derives its project folder from cwd; spawning
+        // in a fresh node dir makes it look in the wrong place.
+        workdirKey: runId,
       });
       await done;
-    } catch (e) {
-      await alertDialog(`Ask Claude failed: ${e}`);
-      return;
     } finally {
       unlistenStream();
       doneRef.fn?.();
     }
-
-    const reply = buf.trim();
-    if (reply) {
-      await appendMessage(runId, blockInfo(block), {
-        author: "claude",
-        text: reply,
-      });
-      await maybeSyncToNotes(block);
-    }
+    return buf.trim();
   }
 
   async function handleToggleNotesSync(block: Block, next: boolean) {
-    const existing = annotations.get(block.idx);
+    const existing = annotations.get(blockHash(block));
     const now = new Date().toISOString();
     const a: Annotation = existing
       ? { ...existing, savedToNotes: next, updatedAt: now }
@@ -150,7 +183,10 @@ export function OutputAnnotator({
   }
 
   async function maybeSyncToNotes(block: Block) {
-    const a = useAnnotations.getState().byOutput.get(runId)?.get(block.idx);
+    const a = useAnnotations
+      .getState()
+      .byOutput.get(runId)
+      ?.get(blockHash(block));
     if (a?.savedToNotes) await syncToNotes(block, a);
   }
 
@@ -168,8 +204,13 @@ export function OutputAnnotator({
   }
 
   async function handleDelete(block: Block) {
-    await remove(runId, block.idx);
+    await remove(runId, blockHash(block));
   }
+
+  const pendingCount = pendingBlocks.reduce(
+    (n, p) => n + p.unanswered.length,
+    0,
+  );
 
   return (
     <div className="output-annotator">
@@ -178,24 +219,56 @@ export function OutputAnnotator({
           key={`${runId}-${block.idx}`}
           block={block}
           active={activeBlockIdx === block.idx}
-          annotation={annotations.get(block.idx)}
+          annotation={annotations.get(blockHash(block))}
           onToggle={toggle}
           onAddNote={handleAddNote}
-          onAskClaude={handleAskClaude}
           onToggleNotesSync={handleToggleNotesSync}
           onDelete={handleDelete}
         />
       ))}
+      {pendingCount > 0 && (
+        <div className="output-annotator__batch-bar">
+          <span className="output-annotator__batch-count">
+            📝 {pendingCount} note{pendingCount === 1 ? "" : "s"} across{" "}
+            {pendingBlocks.length} block
+            {pendingBlocks.length === 1 ? "" : "s"}
+          </span>
+          <span className="output-annotator__batch-hint">
+            Review all your notes, then send them to Claude in one go.
+          </span>
+          <button
+            type="button"
+            className="output-annotator__batch-btn"
+            disabled={batchAsking}
+            onClick={() => void handleAskAll()}
+          >
+            {batchAsking ? "⏳ Asking…" : "Ask Claude with all notes"}
+          </button>
+        </div>
+      )}
     </div>
   );
 }
 
-function composeFollowUpPrompt(block: Block, question: string): string {
-  const quoted = block.content
-    .split("\n")
-    .map((l) => `> ${l}`)
-    .join("\n");
-  return `About this from your previous output:\n\n${quoted}\n\n${question}`;
+/** Compose a single prompt that lists every pending note grouped by the
+ *  block it's attached to. Quoted block content tells Claude what you
+ *  were looking at; numbering lets Claude address each item distinctly. */
+function composeBatchPrompt(
+  pending: Array<{ block: Block; unanswered: string[] }>,
+): string {
+  const sections = pending.map(({ block, unanswered }, i) => {
+    const quoted = block.content
+      .split("\n")
+      .map((l) => `> ${l}`)
+      .join("\n");
+    const notes = unanswered.map((n) => `- ${n}`).join("\n");
+    return `### ${i + 1}. About this block:\n\n${quoted}\n\nMy notes:\n${notes}`;
+  });
+  const intro =
+    pending.length === 1
+      ? "I reviewed your previous output and have a note. Please address it:"
+      : `I reviewed your previous output and have notes on ${pending.length} different parts. Please address each:`;
+  return `${intro}\n\n${sections.join("\n\n")}`;
 }
 
 function composeNotesBody(block: Block, a: Annotation, source: string): string {

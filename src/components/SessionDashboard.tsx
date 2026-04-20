@@ -25,11 +25,20 @@ import { bump, timeStart } from "../lib/perf";
 type DashProps = {
   active?: boolean;
   onJumpToPipeline?: () => void;
+  /** A session id to auto-select when the list arrives. Used by the
+   *  Runs tab's "Open session" affordance so users can jump from a
+   *  historic run record to its live or archived session detail. */
+  pendingSessionOpen?: string | null;
+  /** Called once the pendingSessionOpen has been handled, so the
+   *  parent can clear it and avoid re-triggering. */
+  onPendingSessionConsumed?: () => void;
 };
 
 export default function SessionDashboard({
   active = true,
   onJumpToPipeline,
+  pendingSessionOpen,
+  onPendingSessionConsumed,
 }: DashProps) {
   bump("SessionDashboard");
   const [projects, setProjects] = useState<ProjectInfo[]>([]);
@@ -81,30 +90,66 @@ export default function SessionDashboard({
   );
 
   const refreshTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const refreshInFlight = useRef(false);
+  const lastProjectMtimes = useRef<Map<string, number>>(new Map());
 
   async function refresh() {
+    // Guard: a previous refresh may still be in flight. The watcher can
+    // fire bursts of `sessions:changed` events while Claude is actively
+    // writing — coalesce into one inflight request at a time.
+    if (refreshInFlight.current) return;
+    refreshInFlight.current = true;
     const stop = timeStart("refresh");
     try {
       const ps = await invokeCmd<ProjectInfo[]>("list_projects");
       setProjects(ps);
-      const all: SessionInfo[] = [];
+      // Only re-list sessions for projects whose dir mtime changed since
+      // the previous refresh. On first refresh the map is empty so every
+      // project qualifies (cold start cost). Subsequent refreshes touch
+      // only the projects the user was actually active in — typically 1–2.
+      const prior = lastProjectMtimes.current;
+      const nextMtimes = new Map<string, number>();
+      const stale: typeof ps = [];
+      for (const p of ps) {
+        nextMtimes.set(p.key, p.last_modified_ms);
+        if (prior.get(p.key) !== p.last_modified_ms) stale.push(p);
+      }
+      if (stale.length === 0 && prior.size > 0) {
+        // Nothing changed — keep the existing sessions list, just update
+        // the projects snapshot (which may have gained/lost entries).
+        return;
+      }
+      const allByProject = new Map<string, SessionInfo[]>();
       await Promise.all(
-        ps.map(async (p) => {
+        stale.map(async (p) => {
           try {
             const ss = await invokeCmd<SessionInfo[]>("list_sessions", {
               projectKey: p.key,
             });
-            all.push(...ss);
+            allByProject.set(p.key, ss);
           } catch (e) {
             console.warn(`list_sessions(${p.key}) failed:`, e);
           }
         })
       );
-      all.sort((a, b) => b.modified_ms - a.modified_ms);
-      setSessions(all);
+      setSessions((existing) => {
+        // Merge: keep unchanged projects' sessions from state, replace
+        // stale ones with fresh results, drop any project no longer in `ps`.
+        const keepKeys = new Set(ps.map((p) => p.key));
+        const merged: SessionInfo[] = existing.filter(
+          (s) =>
+            keepKeys.has(s.project_key) &&
+            !allByProject.has(s.project_key),
+        );
+        for (const ss of allByProject.values()) merged.push(...ss);
+        merged.sort((a, b) => b.modified_ms - a.modified_ms);
+        return merged;
+      });
+      lastProjectMtimes.current = nextMtimes;
     } catch (e) {
       console.warn("refresh failed:", e);
     } finally {
+      refreshInFlight.current = false;
       setLoading(false);
       stop();
     }
@@ -121,32 +166,93 @@ export default function SessionDashboard({
     // while the user is in Pipeline.
     if (!active) return;
     refresh();
-    invokeCmd("start_projects_watcher").catch(() => {});
+    let watcherOk = false;
+    invokeCmd("start_projects_watcher")
+      .then(() => {
+        watcherOk = true;
+      })
+      .catch(() => {});
     let unlisten: (() => void) | null = null;
     listenEvent("sessions:changed", () => refreshDebounced()).then(
       (fn) => (unlisten = fn)
     );
-    const t = setInterval(refresh, 15_000);
+    // Safety-net poll — only runs when the OS file watcher failed to
+    // start (FS that doesn't support fsevents/inotify, or mount
+    // quirks). A one-shot 10s check confirms the watcher is healthy;
+    // if it fired at least once, we disable the fallback poll. This
+    // removes the redundant refresh cycle that used to double the
+    // list_projects load on every mount.
+    let fallbackTimer: ReturnType<typeof setInterval> | null = null;
+    const fallbackStart = setTimeout(() => {
+      if (!watcherOk) {
+        fallbackTimer = setInterval(refresh, 60_000);
+      }
+    }, 10_000);
     return () => {
-      clearInterval(t);
+      clearTimeout(fallbackStart);
+      if (fallbackTimer) clearInterval(fallbackTimer);
       unlisten?.();
       if (refreshTimer.current) clearTimeout(refreshTimer.current);
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [active]);
 
-  // If the selected session stops being live, auto-close the drawer —
-  // Monitor is a live-only view. But keep it open for awaiting_user state
-  // (that's the "cooked, review me" state which is still worth reading).
+  // Keep the selected session's data fresh across refreshes, and
+  // close the drawer only if the session vanished from the list
+  // (e.g. file deleted). We used to auto-close on status !== "live",
+  // but that conflicted with opening archived sessions from the Runs
+  // tab's history links. The user can close the drawer themselves.
   useEffect(() => {
     if (!selected) return;
     const fresh = sessions.find((s) => s.id === selected.id);
-    if (!fresh || fresh.status !== "live") {
+    if (!fresh) {
       setSelected(null);
       return;
     }
     if (fresh !== selected) setSelected(fresh);
   }, [sessions, selected]);
+
+  // Consume a pendingSessionOpen request (from the Runs tab). Strategy:
+  // try the in-memory sessions list first (cheap, covers live
+  // sessions). Fall back to `find_session_by_id` which walks every
+  // project dir — covers archived sessions that list_sessions's
+  // live-only filter would've hidden. Either way, clear the pending
+  // slot when done so re-navigating doesn't re-trigger.
+  useEffect(() => {
+    if (!pendingSessionOpen) return;
+    if (loading) return;
+    const quick = sessions.find((s) => s.id === pendingSessionOpen);
+    if (quick) {
+      setSelected(quick);
+      onPendingSessionConsumed?.();
+      return;
+    }
+    let cancelled = false;
+    (async () => {
+      try {
+        const found = await invokeCmd<SessionInfo | null>(
+          "find_session_by_id",
+          { sessionId: pendingSessionOpen },
+        );
+        if (cancelled) return;
+        if (found) {
+          setSelected(found);
+        } else {
+          setToast(
+            `Session ${pendingSessionOpen.slice(0, 8)}… not found. File may have been deleted.`,
+          );
+          setTimeout(() => setToast(null), 6000);
+        }
+      } catch (e) {
+        if (!cancelled) console.warn("find_session_by_id failed:", e);
+      } finally {
+        if (!cancelled) onPendingSessionConsumed?.();
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [pendingSessionOpen, sessions, loading, onPendingSessionConsumed]);
 
   // awaiting_user transition detection:
   //   false→true  →  Claude just cooked this turn  →  ping
@@ -179,8 +285,13 @@ export default function SessionDashboard({
     [projects]
   );
 
+  // Defer the query so typing doesn't re-run the filter on every keystroke.
+  // The input stays responsive (controlled by `query`); the list updates
+  // using `deferredQuery` which React can interrupt for higher-priority work.
+  const deferredQuery = useDeferredValue(query);
+
   const liveSessions = useMemo(() => {
-    const q = query.trim().toLowerCase();
+    const q = deferredQuery.trim().toLowerCase();
     return sessions.filter((s) => {
       if (s.status !== "live") return false;
       if (!showOrka && orkaKeys.has(s.project_key)) return false;
@@ -205,7 +316,7 @@ export default function SessionDashboard({
       }
       return true;
     });
-  }, [sessions, orkaKeys, query, showOrka]);
+  }, [sessions, orkaKeys, deferredQuery, showOrka]);
 
   const counts = useMemo(() => {
     let generating = runningPipelineNodes.length;
@@ -316,7 +427,17 @@ export default function SessionDashboard({
           />
         </div>
 
-        {loading && <div className="dashboard__empty">loading sessions…</div>}
+        {loading && (
+          <div className="dashboard__grid">
+            {Array.from({ length: 4 }).map((_, i) => (
+              <div key={i} className="session-card session-card--skeleton">
+                <div className="skeleton-line skeleton-line--sm" />
+                <div className="skeleton-line skeleton-line--md" />
+                <div className="skeleton-line skeleton-line--lg" />
+              </div>
+            ))}
+          </div>
+        )}
         {!loading &&
           liveSessions.length === 0 &&
           runningPipelineNodes.length === 0 && (

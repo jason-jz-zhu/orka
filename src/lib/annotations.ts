@@ -33,8 +33,16 @@ interface PersistedShape {
 }
 
 interface State {
-  /** outputId → (blockIdx → Annotation) */
-  byOutput: Map<string, Map<number, Annotation>>;
+  /**
+   * outputId → (blockHash → Annotation).
+   *
+   * Keyed on the content-stable block hash rather than block index.
+   * Indexes shift between live parsing of in-flight markdown and
+   * post-hoc reparsing of the finalised `output.md` (partial code
+   * fences, incomplete tables, etc) — hash-keying keeps annotations
+   * attached to the right block across those reparses.
+   */
+  byOutput: Map<string, Map<string, Annotation>>;
   loading: Set<string>;
 
   load: (outputId: string) => Promise<void>;
@@ -62,20 +70,20 @@ interface State {
    */
   upsert: (outputId: string, annotation: Annotation) => Promise<void>;
 
-  remove: (outputId: string, blockIdx: number) => Promise<void>;
+  remove: (outputId: string, blockHash: string) => Promise<void>;
 }
 
-const EMPTY_ANNOTATIONS: Map<number, Annotation> = new Map();
+const EMPTY_ANNOTATIONS: Map<string, Annotation> = new Map();
 
-function cloneMap(src: Map<string, Map<number, Annotation>>): Map<string, Map<number, Annotation>> {
-  const out = new Map<string, Map<number, Annotation>>();
+function cloneMap(src: Map<string, Map<string, Annotation>>): Map<string, Map<string, Annotation>> {
+  const out = new Map<string, Map<string, Annotation>>();
   for (const [k, v] of src) out.set(k, new Map(v));
   return out;
 }
 
-function indexed(list: Annotation[]): Map<number, Annotation> {
-  const m = new Map<number, Annotation>();
-  for (const a of list) m.set(a.blockIdx, a);
+function indexed(list: Annotation[]): Map<string, Annotation> {
+  const m = new Map<string, Annotation>();
+  for (const a of list) m.set(a.blockHash, a);
   return m;
 }
 
@@ -118,21 +126,22 @@ export const useAnnotations = create<State>((set, get) => ({
     // this placeholder with the real response as chunks arrive).
     const now = new Date().toISOString();
     const next = cloneMap(get().byOutput);
-    const inner = next.get(outputId) ?? new Map<number, Annotation>();
-    const existing = inner.get(blockInfo.blockIdx);
+    const inner = next.get(outputId) ?? new Map<string, Annotation>();
+    const existing = inner.get(blockInfo.blockHash);
     const threadTail: ThreadMessage = {
       author: message.author,
       text: message.text,
       createdAt: now,
     };
     if (existing) {
-      inner.set(blockInfo.blockIdx, {
+      inner.set(blockInfo.blockHash, {
         ...existing,
+        blockIdx: blockInfo.blockIdx, // keep display order fresh
         thread: [...existing.thread, threadTail],
         updatedAt: now,
       });
     } else {
-      inner.set(blockInfo.blockIdx, {
+      inner.set(blockInfo.blockHash, {
         ...blockInfo,
         thread: [threadTail],
         savedToNotes: false,
@@ -166,8 +175,8 @@ export const useAnnotations = create<State>((set, get) => ({
   upsert: async (outputId, annotation) => {
     // Local-first write.
     const next = cloneMap(get().byOutput);
-    const inner = next.get(outputId) ?? new Map<number, Annotation>();
-    inner.set(annotation.blockIdx, annotation);
+    const inner = next.get(outputId) ?? new Map<string, Annotation>();
+    inner.set(annotation.blockHash, annotation);
     next.set(outputId, inner);
     set({ byOutput: next });
 
@@ -186,10 +195,10 @@ export const useAnnotations = create<State>((set, get) => ({
     }
   },
 
-  remove: async (outputId, blockIdx) => {
+  remove: async (outputId, blockHash) => {
     const next = cloneMap(get().byOutput);
     const inner = next.get(outputId);
-    if (inner) inner.delete(blockIdx);
+    if (inner) inner.delete(blockHash);
     set({ byOutput: next });
 
     if (!inTauri) return;
@@ -197,7 +206,8 @@ export const useAnnotations = create<State>((set, get) => ({
     try {
       const persisted = await invokeCmd<PersistedShape>("delete_annotation", {
         outputId,
-        blockIdx,
+        blockIdx: null,
+        blockHash,
       });
       const after = cloneMap(get().byOutput);
       after.set(outputId, indexed(persisted.annotations));
@@ -208,6 +218,6 @@ export const useAnnotations = create<State>((set, get) => ({
   },
 }));
 
-export function useOutputAnnotations(outputId: string): Map<number, Annotation> {
+export function useOutputAnnotations(outputId: string): Map<string, Annotation> {
   return useAnnotations((s) => s.byOutput.get(outputId) ?? EMPTY_ANNOTATIONS);
 }

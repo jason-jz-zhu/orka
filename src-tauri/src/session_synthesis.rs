@@ -9,6 +9,9 @@
 
 use serde::{Deserialize, Serialize};
 use std::path::Path;
+use std::process::Stdio;
+use tauri::{AppHandle, Emitter};
+use tokio::io::{AsyncBufReadExt, BufReader};
 
 /// One source — a past Claude Code session the user selected.
 #[derive(Debug, Clone, Deserialize)]
@@ -138,6 +141,258 @@ pub async fn continue_synthesis(
     })
 }
 
+// ─── Streaming variants ───────────────────────────────────────────────
+//
+// Opus on 1M context routinely takes 20–40s per answer. Buffering until
+// complete leaves the user staring at a static "⏳ Thinking…" — no
+// signal that progress is being made, no partial reward. These streaming
+// commands emit tokens as they arrive via Tauri events, keyed by a
+// caller-supplied `stream_id` so multiple SynthesisModal instances don't
+// collide on events.
+//
+// Events emitted (per stream_id):
+//   - "synth:chunk:<id>"  → { text: String }  // incremental assistant text
+//   - "synth:done:<id>"   → { sessionId?, sourcesUsed } // completion
+//   - "synth:error:<id>"  → { message }       // hard failure
+
+#[derive(Clone, Serialize)]
+struct SynthChunk {
+    text: String,
+}
+
+#[derive(Clone, Serialize)]
+struct SynthDone {
+    #[serde(rename = "sessionId")]
+    session_id: Option<String>,
+    #[serde(rename = "sourcesUsed")]
+    sources_used: u32,
+}
+
+#[derive(Clone, Serialize)]
+struct SynthErr {
+    message: String,
+}
+
+#[tauri::command]
+pub async fn synthesize_sessions_stream(
+    app: AppHandle,
+    stream_id: String,
+    question: String,
+    sources: Vec<SynthSource>,
+) -> Result<(), String> {
+    if question.trim().is_empty() {
+        emit_err(&app, &stream_id, "question is empty");
+        return Err("question is empty".into());
+    }
+    if sources.is_empty() {
+        emit_err(&app, &stream_id, "no sources selected");
+        return Err("no sources selected".into());
+    }
+
+    let (prompt, used) = build_synthesis_prompt(&question, &sources);
+    if used == 0 {
+        emit_err(&app, &stream_id, "all selected sources were empty or unreadable");
+        return Err("all selected sources were empty or unreadable".into());
+    }
+    stream_claude_answer(app, stream_id, prompt, None, used).await
+}
+
+#[tauri::command]
+pub async fn continue_synthesis_stream(
+    app: AppHandle,
+    stream_id: String,
+    session_id: String,
+    question: String,
+) -> Result<(), String> {
+    if question.trim().is_empty() {
+        emit_err(&app, &stream_id, "question is empty");
+        return Err("question is empty".into());
+    }
+    stream_claude_answer(app, stream_id, question, Some(session_id), 0).await
+}
+
+fn emit_err(app: &AppHandle, stream_id: &str, msg: &str) {
+    let _ = app.emit(
+        &format!("synth:error:{stream_id}"),
+        SynthErr { message: msg.to_string() },
+    );
+}
+
+fn build_synthesis_prompt(question: &str, sources: &[SynthSource]) -> (String, u32) {
+    let mut rendered_sources = String::new();
+    let mut used = 0u32;
+    for (i, src) in sources.iter().enumerate() {
+        let Some(transcript) = read_tail_transcript(Path::new(&src.session_path), 40) else {
+            continue;
+        };
+        if transcript.trim().is_empty() {
+            continue;
+        }
+        used += 1;
+        let label = src
+            .label
+            .clone()
+            .unwrap_or_else(|| format!("session {}", &src.session_id[..8.min(src.session_id.len())]));
+        rendered_sources.push_str(&format!(
+            "## Source {} — {label} (id: {})\n\n{transcript}\n\n---\n\n",
+            i + 1,
+            &src.session_id[..8.min(src.session_id.len())],
+        ));
+    }
+
+    const MAX_SRC_CHARS: usize = 30_000;
+    if rendered_sources.len() > MAX_SRC_CHARS {
+        let safe = rendered_sources
+            .char_indices()
+            .rfind(|(i, _)| *i <= MAX_SRC_CHARS)
+            .map(|(i, _)| i)
+            .unwrap_or(MAX_SRC_CHARS);
+        rendered_sources.truncate(safe);
+        rendered_sources.push_str("\n\n…(older source material elided to fit context)…\n");
+    }
+
+    let prompt = format!(
+        "You are answering a question across {used} past Claude Code session{} the user has selected. \
+Read the source transcripts below carefully, look for connections and contradictions between them, \
+and answer the user's question. Cite source numbers ('Source 2 shows …') where it helps.\n\
+\n\
+If the sources don't contain enough to answer, say so plainly instead of guessing.\n\
+\n\
+--- SOURCES ---\n\
+{rendered_sources}\n\
+--- END SOURCES ---\n\
+\n\
+QUESTION: {question}",
+        if used == 1 { "" } else { "s" }
+    );
+    (prompt, used)
+}
+
+/// Spawn `claude -p --output-format stream-json --verbose`, parse each line,
+/// emit text deltas as they arrive. Extracts session_id from the terminal
+/// `result` event.
+async fn stream_claude_answer(
+    app: AppHandle,
+    stream_id: String,
+    prompt: String,
+    resume_id: Option<String>,
+    sources_used: u32,
+) -> Result<(), String> {
+    let model = crate::model_config::model_for_synthesis();
+    let _permit = crate::claude_gate::acquire().await;
+    let mut cmd = tokio::process::Command::new("claude");
+    cmd.arg("-p")
+        .arg("--output-format")
+        .arg("stream-json")
+        .arg("--verbose");
+    if !model.trim().is_empty() {
+        cmd.arg("--model").arg(&model);
+    }
+    if let Some(sid) = &resume_id {
+        cmd.arg("--resume").arg(sid).arg("--fork-session");
+    }
+    cmd.arg(&prompt);
+    cmd.stdout(Stdio::piped()).stderr(Stdio::piped());
+
+    let mut child = match cmd.spawn() {
+        Ok(c) => c,
+        Err(e) => {
+            let msg = format!("spawn claude: {e}");
+            emit_err(&app, &stream_id, &msg);
+            return Err(msg);
+        }
+    };
+
+    let stdout = child.stdout.take().ok_or("stdout pipe missing")?;
+    let stderr = child.stderr.take().ok_or("stderr pipe missing")?;
+
+    // stderr collector — surface on error.
+    let stderr_task = tokio::spawn(async move {
+        let mut buf = String::new();
+        let mut lines = BufReader::new(stderr).lines();
+        while let Ok(Some(line)) = lines.next_line().await {
+            buf.push_str(&line);
+            buf.push('\n');
+        }
+        buf
+    });
+
+    let mut reader = BufReader::new(stdout).lines();
+    let mut final_session_id: Option<String> = resume_id.clone();
+    let mut seen_any_text = false;
+
+    while let Ok(Some(line)) = reader.next_line().await {
+        let Ok(v) = serde_json::from_str::<serde_json::Value>(&line) else {
+            continue;
+        };
+        let ty = v.get("type").and_then(|t| t.as_str()).unwrap_or("");
+        match ty {
+            "assistant" => {
+                if let Some(content) = v
+                    .get("message")
+                    .and_then(|m| m.get("content"))
+                    .and_then(|c| c.as_array())
+                {
+                    for block in content {
+                        let bt = block.get("type").and_then(|t| t.as_str()).unwrap_or("");
+                        if bt == "text" {
+                            if let Some(text) = block.get("text").and_then(|t| t.as_str()) {
+                                if !text.is_empty() {
+                                    seen_any_text = true;
+                                    let _ = app.emit(
+                                        &format!("synth:chunk:{stream_id}"),
+                                        SynthChunk { text: text.to_string() },
+                                    );
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            "result" => {
+                if let Some(sid) = v.get("session_id").and_then(|s| s.as_str()) {
+                    final_session_id = Some(sid.to_string());
+                }
+                // Some claude builds put the final answer in `result` as a
+                // single string when no intermediate assistant turns ran.
+                if !seen_any_text {
+                    if let Some(text) = v.get("result").and_then(|t| t.as_str()) {
+                        if !text.is_empty() {
+                            let _ = app.emit(
+                                &format!("synth:chunk:{stream_id}"),
+                                SynthChunk { text: text.to_string() },
+                            );
+                        }
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+
+    let status = child.wait().await.map_err(|e| e.to_string())?;
+    let stderr_text = stderr_task.await.unwrap_or_default();
+
+    if !status.success() {
+        let msg = format!(
+            "claude -p exited {}: {}",
+            status.code().unwrap_or(-1),
+            stderr_text.trim()
+        );
+        emit_err(&app, &stream_id, &msg);
+        return Err(msg);
+    }
+
+    let _ = app.emit(
+        &format!("synth:done:{stream_id}"),
+        SynthDone {
+            session_id: final_session_id,
+            sources_used,
+        },
+    );
+    Ok(())
+}
+
 /// Tail-only read + render USER/ASSISTANT lines, same shape as
 /// session_brief::extract_transcript but slightly larger window.
 fn read_tail_transcript(path: &Path, max_lines: usize) -> Option<String> {
@@ -228,6 +483,7 @@ async fn call_claude_print_json(
     resume_id: Option<&str>,
 ) -> Result<(String, Option<String>), String> {
     let model = crate::model_config::model_for_synthesis();
+    let _permit = crate::claude_gate::acquire().await;
     let mut cmd = tokio::process::Command::new("claude");
     cmd.arg("-p").arg("--output-format").arg("json");
     cmd.arg("--model").arg(&model);

@@ -1,27 +1,18 @@
 import { useEffect, useState } from "react";
-import {
-  open as openDialog,
-  save as saveDialog,
-} from "@tauri-apps/plugin-dialog";
+import { save as saveDialog } from "@tauri-apps/plugin-dialog";
 import { invokeCmd, listenEvent } from "../lib/tauri";
 import { useGraph } from "../lib/graph-store";
-import { alertDialog, confirmDialog, promptDialog } from "../lib/dialogs";
+import { alertDialog, confirmDialog } from "../lib/dialogs";
 import SkillExportModal from "./SkillExportModal";
 
 type Props = {
   onLoad: (name: string) => void;
-  onSaveCurrent: () => void;
-  onNew: () => void;
-  onGenerate: () => void;
   onSchedule: (name: string) => void;
   scheduledNames: Set<string>;
 };
 
 export default function PipelineLibrary({
   onLoad,
-  onSaveCurrent,
-  onNew,
-  onGenerate,
   onSchedule,
   scheduledNames,
 }: Props) {
@@ -31,60 +22,6 @@ export default function PipelineLibrary({
   const [collapsed, setCollapsed] = useState(false);
   const [loading, setLoading] = useState(true);
   const [skillExportFor, setSkillExportFor] = useState<string | null>(null);
-
-  async function importFromFile() {
-    const picked = await openDialog({
-      multiple: false,
-      filters: [{ name: "Pipeline JSON", extensions: ["json"] }],
-      title: "Import pipeline JSON",
-    });
-    if (typeof picked !== "string") return;
-    try {
-      const text = await invokeCmd<string>("read_file_text", { path: picked });
-      await importJsonText(text);
-    } catch (e) {
-      await alertDialog(`Import failed: ${e}`);
-    }
-  }
-
-  async function importFromUrl() {
-    const url = await promptDialog(
-      "URL to a pipeline JSON (e.g. raw GitHub gist)",
-      { title: "Import from URL" }
-    );
-    if (!url) return;
-    try {
-      const text = await invokeCmd<string>("fetch_text_url", { url });
-      await importJsonText(text);
-    } catch (e) {
-      await alertDialog(`Fetch failed: ${e}`);
-    }
-  }
-
-  async function importJsonText(text: string) {
-    let parsed: { name?: string; nodes?: unknown; edges?: unknown };
-    try {
-      parsed = JSON.parse(text);
-    } catch {
-      throw new Error("not valid JSON");
-    }
-    if (!Array.isArray(parsed.nodes) || !Array.isArray(parsed.edges)) {
-      throw new Error("missing 'nodes' or 'edges' array");
-    }
-    let name =
-      typeof parsed.name === "string" && parsed.name.trim()
-        ? parsed.name.trim()
-        : null;
-    if (!name) {
-      name =
-        (await promptDialog("Save imported pipeline as:", {
-          title: "Imported pipeline name",
-        })) ?? null;
-      if (!name) return;
-    }
-    await invokeCmd("save_template", { name, content: text });
-    await refresh();
-  }
 
   async function exportToFile(name: string) {
     try {
@@ -188,50 +125,12 @@ export default function PipelineLibrary({
           </button>
         </div>
       </div>
-      <div className="pipeline-lib__actions">
-        <button
-          className="pipeline-lib__new"
-          onClick={onNew}
-          title="Start a new blank pipeline"
-        >
-          + New
-        </button>
-        <button
-          className="pipeline-lib__save"
-          onClick={onSaveCurrent}
-          title="Save current graph as a new template"
-        >
-          + Save
-        </button>
-      </div>
-      <div className="pipeline-lib__generate-row">
-        <button
-          className="pipeline-lib__generate"
-          onClick={onGenerate}
-          title="Describe what you want — Claude designs the pipeline"
-        >
-          ✨ Generate from prompt
-        </button>
-      </div>
-      <div className="pipeline-lib__io-row">
-        <button
-          className="pipeline-lib__io-btn"
-          onClick={importFromFile}
-          title="Import a pipeline JSON from disk"
-        >
-          ⬆ Import
-        </button>
-        <button
-          className="pipeline-lib__io-btn"
-          onClick={importFromUrl}
-          title="Import a pipeline from a public URL (e.g. raw GitHub gist)"
-        >
-          🌐 URL
-        </button>
-      </div>
       {loading && <div className="sidebar__status">loading…</div>}
       {!loading && templates.length === 0 && (
-        <div className="sidebar__status">(no templates yet)</div>
+        <div className="sidebar__status">
+          No saved pipelines. Composite skills now live in{" "}
+          <code>~/.claude/skills/</code> as <code>SKILL.md</code>.
+        </div>
       )}
       <div className="sidebar__list">
         {templates.map((name) => {

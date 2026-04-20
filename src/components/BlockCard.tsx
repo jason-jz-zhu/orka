@@ -15,17 +15,11 @@ type Props = {
   onToggle?: (block: Block) => void;
 
   /**
-   * Append a user note to the thread. No AI call. Called when the user
-   * types and presses Shift+Enter (or Cmd+S on an empty input).
+   * Append a user note to the thread. No AI call — notes get sent in a
+   * batch via the annotator's "Ask Claude with all notes" button so the
+   * user can review the whole output before asking anything.
    */
   onAddNote?: (block: Block, text: string) => Promise<void> | void;
-
-  /**
-   * Send a message to Claude; Claude's reply will stream back into the
-   * thread via onAddClaudeMessage at the store level. Called on plain
-   * Enter with text.
-   */
-  onAskClaude?: (block: Block, text: string) => Promise<void> | void;
 
   /** Toggle the "sync to Apple Notes" flag on the annotation. */
   onToggleNotesSync?: (block: Block, next: boolean) => Promise<void> | void;
@@ -59,7 +53,6 @@ function BlockCardImpl({
   active,
   onToggle,
   onAddNote,
-  onAskClaude,
   onToggleNotesSync,
   onDelete,
 }: Props) {
@@ -80,16 +73,12 @@ function BlockCardImpl({
     }
   }, [active]);
 
-  async function submit(kind: "ask" | "note") {
+  async function submitNote() {
     const text = draft.trim();
     if (!text || sending) return;
     setSending(true);
     try {
-      if (kind === "ask") {
-        await onAskClaude?.(block, text);
-      } else {
-        await onAddNote?.(block, text);
-      }
+      await onAddNote?.(block, text);
       setDraft("");
     } finally {
       setSending(false);
@@ -146,17 +135,17 @@ function BlockCardImpl({
             value={draft}
             placeholder={
               hasThread
-                ? "Reply (Enter=ask Claude, Shift+Enter=note)"
-                : "Ask Claude about this… (Shift+Enter for a note only)"
+                ? "Add another note (Enter to save)"
+                : "Add a note — Enter to save, Esc to close"
             }
             onChange={(e) => setDraft(e.target.value)}
             onKeyDown={(e) => {
+              // Enter saves as note; Shift+Enter inserts a newline (textarea
+              // default). Notes are batched — the annotator's "Ask Claude"
+              // bar ships them all at once when the user is ready.
               if (e.key === "Enter" && !e.shiftKey && !e.metaKey && !e.ctrlKey) {
                 e.preventDefault();
-                void submit("ask");
-              } else if (e.key === "Enter" && e.shiftKey) {
-                e.preventDefault();
-                void submit("note");
+                void submitNote();
               } else if (e.key === "Escape") {
                 e.preventDefault();
                 setDraft("");
@@ -193,21 +182,12 @@ function BlockCardImpl({
             )}
             <button
               type="button"
-              className="block-card__thread-btn"
-              disabled={!draft.trim() || sending}
-              title="Save as note (Shift+Enter)"
-              onClick={() => void submit("note")}
-            >
-              Note
-            </button>
-            <button
-              type="button"
               className="block-card__thread-btn block-card__thread-btn--primary"
               disabled={!draft.trim() || sending}
-              title="Ask Claude (Enter)"
-              onClick={() => void submit("ask")}
+              title="Save note (Enter) — ask Claude later in a batch"
+              onClick={() => void submitNote()}
             >
-              {sending ? "⏳" : "Ask Claude"}
+              {sending ? "⏳" : "Save note"}
             </button>
           </div>
         </div>
@@ -266,6 +246,31 @@ function renderBlockBody(block: Block) {
             {stripBlockquoteMarkers(block.content)}
           </ReactMarkdown>
         </blockquote>
+      );
+    case "table-header":
+      // Render as a real HTML table so header cells align the same way
+      // they will when rows are rendered beneath. remark-gfm handles the
+      // `| a | b |\n|---|---|` shape; we pad with an empty row so GFM
+      // produces <thead><tr>...</tr></thead> with no body rows.
+      return (
+        <div className="block-card__table">
+          <ReactMarkdown remarkPlugins={[remarkGfm]}>
+            {block.content}
+          </ReactMarkdown>
+        </div>
+      );
+    case "table-row":
+      // Re-attach the header so GFM renders a standalone one-row table
+      // with column labels intact. Without the header, `|a|b|` alone is
+      // just prose to the markdown renderer.
+      return (
+        <div className="block-card__table block-card__table--row">
+          <ReactMarkdown remarkPlugins={[remarkGfm]}>
+            {block.tableHeader
+              ? `${block.tableHeader}\n${block.content}`
+              : block.content}
+          </ReactMarkdown>
+        </div>
       );
     case "paragraph":
     default:

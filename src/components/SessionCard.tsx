@@ -90,7 +90,8 @@ function SessionCardImpl({
   const ask =
     session.last_user_preview ||
     session.first_user_preview ||
-    "(no user messages)";
+    session.spawn_label ||
+    "(agent-spawned)";
   const now = session.last_message_preview || "";
   const primaryAction = state === "for-review" ? "Review" : "Open";
 

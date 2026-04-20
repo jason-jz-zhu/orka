@@ -174,13 +174,23 @@ pub async fn append_message(
         created_at: now.clone(),
     };
 
+    // Match by block_hash (content fingerprint) — NOT block_idx.
+    // Index shifts between live streaming and post-hoc reconstruction
+    // (partial code fences resolve, extra blocks may appear/disappear)
+    // would otherwise leak into "lost" annotations. Hash is derived
+    // from block content so stays stable across re-parses.
     if let Some(existing) = data
         .annotations
         .iter_mut()
-        .find(|a| a.block_idx == block_idx)
+        .find(|a| a.block_hash == block_hash)
     {
         existing.thread.push(message);
         existing.updated_at = now;
+        // Keep the stored block_idx current for display ordering —
+        // downstream consumers that render annotations in document
+        // order still benefit from an up-to-date index, even though
+        // it's no longer the primary key.
+        existing.block_idx = block_idx;
     } else {
         data.annotations.push(Annotation {
             block_idx,
@@ -203,11 +213,21 @@ pub async fn append_message(
 #[tauri::command]
 pub async fn delete_annotation(
     output_id: String,
-    block_idx: usize,
+    block_idx: Option<usize>,
+    block_hash: Option<String>,
 ) -> Result<RunAnnotations, String> {
+    // Prefer block_hash (content-stable key). Fall back to block_idx
+    // for callers still on the old API — but for annotations written
+    // after this change, hash is the source of truth.
     let path = file_for(&output_id)?;
     let mut data = load_annotations(output_id).await?;
-    data.annotations.retain(|a| a.block_idx != block_idx);
+    if let Some(h) = block_hash.as_deref() {
+        data.annotations.retain(|a| a.block_hash != h);
+    } else if let Some(idx) = block_idx {
+        data.annotations.retain(|a| a.block_idx != idx);
+    } else {
+        return Err("delete_annotation requires block_hash or block_idx".into());
+    }
     write_atomic(&path, &data).await?;
     Ok(data)
 }

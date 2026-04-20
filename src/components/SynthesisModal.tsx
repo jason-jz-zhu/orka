@@ -1,14 +1,8 @@
 import { useEffect, useRef, useState } from "react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
-import { invokeCmd } from "../lib/tauri";
+import { invokeCmd, listenEvent } from "../lib/tauri";
 import type { SessionInfo } from "../lib/session-types";
-
-interface SynthResult {
-  answer: string;
-  sourcesUsed: number;
-  sessionId: string | null;
-}
 
 type Props = {
   sources: SessionInfo[];
@@ -16,6 +10,12 @@ type Props = {
 };
 
 type Turn = { role: "user" | "assistant"; text: string };
+
+/** Generate a modal-scoped stream id so concurrent synthesis modals don't
+ *  collide on Tauri event names. Lives for the lifetime of the modal. */
+function makeStreamId() {
+  return `synth-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
+}
 
 /**
  * Cross-session synthesis — thread mode. First question seeds a new
@@ -32,8 +32,9 @@ export function SynthesisModal({ sources, onClose }: Props) {
   const [sessionId, setSessionId] = useState<string | null>(null);
   const [sourcesUsed, setSourcesUsed] = useState<number | null>(null);
   const scrollRef = useRef<HTMLDivElement | null>(null);
+  const streamIdRef = useRef<string>(makeStreamId());
 
-  // Keep the thread scrolled to the bottom as answers land.
+  // Keep the thread scrolled to the bottom as tokens land.
   useEffect(() => {
     const el = scrollRef.current;
     if (el) el.scrollTop = el.scrollHeight;
@@ -43,35 +44,95 @@ export function SynthesisModal({ sources, onClose }: Props) {
     const question = draft.trim();
     if (!question || sending) return;
     setError(null);
-    setThread((t) => [...t, { role: "user", text: question }]);
+    // Append both the user turn AND an empty assistant turn that will
+    // fill in as stream chunks arrive.
+    setThread((t) => [
+      ...t,
+      { role: "user", text: question },
+      { role: "assistant", text: "" },
+    ]);
     setDraft("");
     setSending(true);
+    const streamId = streamIdRef.current;
+
+    // Subscribe to chunk/done/error events for this stream. Appenders
+    // mutate the LAST assistant turn so they don't race with further
+    // user turns added later.
+    const unlistens: Array<() => void> = [];
+    const appendChunk = (text: string) =>
+      setThread((t) => {
+        if (t.length === 0) return t;
+        const last = t[t.length - 1];
+        if (last.role !== "assistant") return t;
+        return [...t.slice(0, -1), { ...last, text: last.text + text }];
+      });
+
     try {
+      unlistens.push(
+        await listenEvent<{ text: string }>(
+          `synth:chunk:${streamId}`,
+          (p) => appendChunk(p.text),
+        ),
+      );
+      unlistens.push(
+        await listenEvent<{ sessionId?: string | null; sourcesUsed: number }>(
+          `synth:done:${streamId}`,
+          (p) => {
+            if (p.sessionId) setSessionId(p.sessionId);
+            if (sourcesUsed == null && p.sourcesUsed > 0) {
+              setSourcesUsed(p.sourcesUsed);
+            }
+            setSending(false);
+          },
+        ),
+      );
+      unlistens.push(
+        await listenEvent<{ message: string }>(
+          `synth:error:${streamId}`,
+          (p) => {
+            setError(p.message);
+            appendChunk(`\n\n✗ ${p.message}`);
+            setSending(false);
+          },
+        ),
+      );
+
       const payload = sources.map((s) => ({
         sessionId: s.id,
         sessionPath: s.path,
         label: projectLabel(s),
       }));
-      const result: SynthResult = sessionId
-        ? await invokeCmd("continue_synthesis", { sessionId, question })
-        : await invokeCmd("synthesize_sessions", {
-            question,
-            sources: payload,
-          });
-      setThread((t) => [...t, { role: "assistant", text: result.answer }]);
-      if (result.sessionId) setSessionId(result.sessionId);
-      if (sourcesUsed == null && result.sourcesUsed > 0) {
-        setSourcesUsed(result.sourcesUsed);
+      if (sessionId) {
+        await invokeCmd("continue_synthesis_stream", {
+          streamId,
+          sessionId,
+          question,
+        });
+      } else {
+        await invokeCmd("synthesize_sessions_stream", {
+          streamId,
+          question,
+          sources: payload,
+        });
       }
     } catch (e) {
       const msg = String(e);
       setError(msg);
-      setThread((t) => [
-        ...t,
-        { role: "assistant", text: `✗ ${msg}` },
-      ]);
-    } finally {
+      appendChunk(`\n\n✗ ${msg}`);
       setSending(false);
+    } finally {
+      // Always release listeners — even on error the backend has already
+      // emitted whatever it was going to. A small timeout gives the done
+      // event time to land before we unlisten.
+      setTimeout(() => {
+        for (const fn of unlistens) {
+          try {
+            fn();
+          } catch {
+            /* ignored */
+          }
+        }
+      }, 100);
     }
   }
 
@@ -124,29 +185,34 @@ export function SynthesisModal({ sources, onClose }: Props) {
               continue in the same thread.
             </div>
           )}
-          {thread.map((turn, i) => (
-            <div
-              key={i}
-              className={`synth-modal__turn synth-modal__turn--${turn.role}`}
-            >
-              <div className="synth-modal__turn-label">
-                {turn.role === "user" ? "👤 you" : "🤖 claude"}
+          {thread.map((turn, i) => {
+            const isStreaming =
+              sending &&
+              i === thread.length - 1 &&
+              turn.role === "assistant";
+            return (
+              <div
+                key={i}
+                className={`synth-modal__turn synth-modal__turn--${turn.role}`}
+              >
+                <div className="synth-modal__turn-label">
+                  {turn.role === "user" ? "👤 you" : "🤖 claude"}
+                </div>
+                <div className="synth-modal__turn-body">
+                  {turn.text ? (
+                    <ReactMarkdown remarkPlugins={[remarkGfm]}>
+                      {turn.text}
+                    </ReactMarkdown>
+                  ) : isStreaming ? (
+                    <span className="synth-modal__pending">⏳ Thinking…</span>
+                  ) : null}
+                  {isStreaming && turn.text && (
+                    <span className="synth-modal__cursor">▍</span>
+                  )}
+                </div>
               </div>
-              <div className="synth-modal__turn-body">
-                <ReactMarkdown remarkPlugins={[remarkGfm]}>
-                  {turn.text}
-                </ReactMarkdown>
-              </div>
-            </div>
-          ))}
-          {sending && (
-            <div className="synth-modal__turn synth-modal__turn--assistant">
-              <div className="synth-modal__turn-label">🤖 claude</div>
-              <div className="synth-modal__turn-body synth-modal__pending">
-                ⏳ Thinking…
-              </div>
-            </div>
-          )}
+            );
+          })}
         </div>
 
         <div className="synth-modal__input-row">

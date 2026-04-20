@@ -21,7 +21,9 @@ export type BlockType =
   | "code"
   | "heading"
   | "blockquote"
-  | "hr";
+  | "hr"
+  | "table-header"
+  | "table-row";
 
 export interface Block {
   /** Stable 0-based index within the output. */
@@ -33,6 +35,11 @@ export interface Block {
   language?: string;
   /** For type === "heading", level 1..6. */
   level?: number;
+  /** For `table-row`: the header row that introduced this row's table, so
+   *  rendering can re-emit a mini `|a|b|\n|-|-|\n|...|` so the row renders
+   *  with its columns labeled. Included on every row block so each row
+   *  can be displayed standalone in an annotation card. */
+  tableHeader?: string;
 }
 
 const BULLET_RE = /^(\s*)([-*+]|\d+\.)\s+(.*)$/;
@@ -40,6 +47,11 @@ const HEADING_RE = /^(#{1,6})\s+(.+?)\s*#*\s*$/;
 const HR_RE = /^\s*(-{3,}|\*{3,}|_{3,})\s*$/;
 const CODE_FENCE_RE = /^\s*(```|~~~)\s*([\w+-]*)\s*$/;
 const BLOCKQUOTE_RE = /^\s*>\s?(.*)$/;
+// Table header separator, e.g. `|---|:---|---:|`. Spaces and colons optional.
+const TABLE_SEP_RE = /^\s*\|?\s*:?-{2,}:?\s*(\|\s*:?-{2,}:?\s*)+\|?\s*$/;
+// A generic row — starts with `|` and contains at least one more `|`. We
+// only treat it as a table row when paired with a separator line.
+const TABLE_ROW_RE = /^\s*\|.+\|\s*$/;
 
 /**
  * Parse markdown into an ordered array of Blocks.
@@ -112,6 +124,37 @@ export function parseBlocks(markdown: string): Block[] {
       flushBuf();
       blocks.push({ idx: idx++, type: "hr", content: line.trim() });
       i++;
+      continue;
+    }
+
+    // ── Markdown table: header + separator + N rows ──
+    // Detected by looking one line ahead for the `|---|---|` separator.
+    // If found, each row becomes its own block so the user can annotate
+    // individual rows. Without this, a 10-row table would collapse into
+    // one giant paragraph block because rows look like paragraph lines.
+    if (
+      TABLE_ROW_RE.test(line) &&
+      i + 1 < lines.length &&
+      TABLE_SEP_RE.test(lines[i + 1])
+    ) {
+      flushBuf();
+      const header = line.trim();
+      const separator = lines[i + 1].trim();
+      blocks.push({
+        idx: idx++,
+        type: "table-header",
+        content: `${header}\n${separator}`,
+      });
+      i += 2;
+      while (i < lines.length && TABLE_ROW_RE.test(lines[i])) {
+        blocks.push({
+          idx: idx++,
+          type: "table-row",
+          content: lines[i].trim(),
+          tableHeader: `${header}\n${separator}`,
+        });
+        i++;
+      }
       continue;
     }
 
@@ -194,6 +237,17 @@ export function blocksToMarkdown(blocks: Block[]): string {
         break;
       case "code":
         parts.push(`\`\`\`${b.language ?? ""}\n${b.content}\n\`\`\``);
+        break;
+      case "table-header":
+        parts.push(b.content);
+        break;
+      case "table-row":
+        // Prepend the header so a round-trip through parse + render still
+        // yields a valid table. This means serializing a subset of rows
+        // still produces a readable table rather than dangling pipe lines.
+        parts.push(
+          b.tableHeader ? `${b.tableHeader}\n${b.content}` : b.content,
+        );
         break;
       default:
         parts.push(b.content);
@@ -280,6 +334,22 @@ function __devSelfCheck() {
       name: "empty input → no blocks",
       input: "",
       expect: (b) => b.length === 0,
+    },
+    {
+      name: "table header + 3 rows → 1 header block + 3 row blocks",
+      input: "| a | b |\n|---|---|\n| 1 | 2 |\n| 3 | 4 |\n| 5 | 6 |",
+      expect: (b) =>
+        b.length === 4 &&
+        b[0].type === "table-header" &&
+        b.slice(1).every((x) => x.type === "table-row") &&
+        b[1].content === "| 1 | 2 |" &&
+        b[3].content === "| 5 | 6 |" &&
+        b[1].tableHeader === "| a | b |\n|---|---|",
+    },
+    {
+      name: "paragraph with leading pipe ≠ table",
+      input: "| not a table (no separator)\njust prose",
+      expect: (b) => b.length === 1 && b[0].type === "paragraph",
     },
   ];
 

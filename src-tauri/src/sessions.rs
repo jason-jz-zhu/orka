@@ -32,6 +32,11 @@ struct CachedTail {
     /// Text preview of the most recent *real* user ask. Filters out
     /// tool_result lines, local-command wrappers, and isMeta markers.
     last_user_preview: Option<String>,
+    /// Best-effort label for *what spawned this session* when there are no
+    /// real user asks (subagent / Task-tool / slash-command invocations).
+    /// Derived from head lines: isMeta `<command-name>X</command-name>` →
+    /// `/X`, else first assistant `tool_use` name → `[tool: X]`.
+    spawn_label: Option<String>,
 }
 
 /// Harness-injected wrappers that show up as `type: "user"` text but are
@@ -120,41 +125,138 @@ fn extract_real_user_ask(v: &serde_json::Value) -> Option<String> {
     Some(truncate(&joined, 160))
 }
 
+/// Returns a short label describing *what kicked off* this session when no
+/// real human ask exists. Looks for:
+///   1. isMeta user line carrying `<command-name>X</command-name>` → `/X`
+///   2. first assistant `tool_use` block → `[tool: Name]`
+/// Returns None for lines that yield neither signal.
+fn extract_spawn_label(v: &serde_json::Value) -> Option<String> {
+    let t = v.get("type").and_then(|x| x.as_str())?;
+    if t == "user" {
+        // Only interested in isMeta command wrappers here; real asks are
+        // handled by extract_real_user_ask on the caller side.
+        if !v.get("isMeta").and_then(|x| x.as_bool()).unwrap_or(false) {
+            return None;
+        }
+        let raw = v.get("message").and_then(|m| m.get("content"))?;
+        let text = raw.as_str().map(|s| s.to_string()).or_else(|| {
+            raw.as_array().and_then(|arr| {
+                arr.iter()
+                    .find_map(|b| {
+                        if b.get("type").and_then(|x| x.as_str()) == Some("text") {
+                            b.get("text").and_then(|x| x.as_str()).map(|s| s.to_string())
+                        } else {
+                            None
+                        }
+                    })
+            })
+        })?;
+        let trimmed = text.trim();
+        // Pull out `<command-name>...</command-name>` if present.
+        if let Some(rest) = trimmed.strip_prefix("<command-name>") {
+            if let Some(end) = rest.find("</command-name>") {
+                let name = rest[..end].trim();
+                if !name.is_empty() {
+                    return Some(format!("/{}", name.trim_start_matches('/')));
+                }
+            }
+        }
+        return None;
+    }
+    if t == "assistant" {
+        let arr = v.get("message").and_then(|m| m.get("content"))?.as_array()?;
+        for b in arr {
+            if b.get("type").and_then(|x| x.as_str()) == Some("tool_use") {
+                if let Some(name) = b.get("name").and_then(|x| x.as_str()) {
+                    return Some(format!("[tool: {}]", name));
+                }
+            }
+        }
+    }
+    None
+}
+
 static TAIL_CACHE: LazyLock<Mutex<HashMap<PathBuf, CachedTail>>> =
     LazyLock::new(|| Mutex::new(HashMap::new()));
 
-/// Read a .jsonl session file in a single pass, extracting everything
-/// `list_sessions` needs: the first N non-empty lines, the last N non-empty
-/// lines, and the count of `type:"assistant"` entries. Replaces three
-/// separate full-file reads.
+/// Read a .jsonl session file, extracting everything `list_sessions` needs:
+/// the first N non-empty lines, the last N non-empty lines, and an
+/// approximate count of `type:"assistant"` entries.
+///
+/// Uses two bounded reads (head 16KB + tail 256KB) instead of slurping the
+/// whole file — session JSONLs can grow into hundreds of MB, and previously
+/// every refresh re-read the entire file. Turn count is approximate for
+/// large files (only counts assistants within the tail window), but that's
+/// fine for the ghost-session filter and live-status heuristics that use it.
 fn scan_session_tail(path: &Path, first_n: usize, last_n: usize) -> CachedTail {
+    use std::io::{Read, Seek, SeekFrom};
+    const HEAD_WINDOW: u64 = 16 * 1024;
+    const TAIL_WINDOW: u64 = 256 * 1024;
+
     let mtime_ms_v = mtime_ms(path);
     let size_bytes = file_size(path);
-    let Ok(text) = std::fs::read_to_string(path) else {
-        return CachedTail {
-            mtime_ms: mtime_ms_v,
-            size_bytes,
-            first_lines: vec![],
-            last_lines: vec![],
-            turn_count: 0,
-            last_user_preview: None,
-        };
+    let empty = CachedTail {
+        mtime_ms: mtime_ms_v,
+        size_bytes,
+        first_lines: vec![],
+        last_lines: vec![],
+        turn_count: 0,
+        last_user_preview: None,
+        spawn_label: None,
     };
+    let Ok(mut f) = std::fs::File::open(path) else {
+        return empty;
+    };
+
+    // Head — read up to HEAD_WINDOW bytes from start, extract first_n lines.
     let mut first_lines: Vec<String> = Vec::with_capacity(first_n);
+    let head_len = size_bytes.min(HEAD_WINDOW);
+    if head_len > 0 {
+        let mut head_buf = vec![0u8; head_len as usize];
+        if f.read_exact(&mut head_buf).is_ok() {
+            for line in String::from_utf8_lossy(&head_buf)
+                .lines()
+                .filter(|l| !l.trim().is_empty())
+            {
+                if first_lines.len() >= first_n {
+                    break;
+                }
+                first_lines.push(line.to_string());
+            }
+        }
+    }
+
+    // Tail — seek to last TAIL_WINDOW bytes, drop partial leading line,
+    // scan for last_n lines + turn count + last user preview.
+    let tail_start = size_bytes.saturating_sub(TAIL_WINDOW);
+    if f.seek(SeekFrom::Start(tail_start)).is_err() {
+        return CachedTail { first_lines, ..empty };
+    }
+    let mut tail_buf: Vec<u8> = Vec::with_capacity(TAIL_WINDOW as usize);
+    if f.read_to_end(&mut tail_buf).is_err() {
+        return CachedTail { first_lines, ..empty };
+    }
+    let tail_slice: &[u8] = if tail_start > 0 {
+        match tail_buf.iter().position(|&b| b == b'\n') {
+            Some(pos) => &tail_buf[pos + 1..],
+            None => &[],
+        }
+    } else {
+        &tail_buf[..]
+    };
+
     let mut tail: std::collections::VecDeque<String> =
         std::collections::VecDeque::with_capacity(last_n);
     let mut turn_count = 0usize;
     let mut last_user_preview: Option<String> = None;
-    for raw in text.lines().filter(|l| !l.trim().is_empty()) {
-        if first_lines.len() < first_n {
-            first_lines.push(raw.to_string());
-        }
+    for raw in String::from_utf8_lossy(tail_slice)
+        .lines()
+        .filter(|l| !l.trim().is_empty())
+    {
         if tail.len() == last_n {
             tail.pop_front();
         }
         tail.push_back(raw.to_string());
-        // Single-parse-per-line: update turn_count AND last_user_preview
-        // from the same deserialized value.
         if let Ok(v) = serde_json::from_str::<serde_json::Value>(raw) {
             if v.get("type").and_then(|x| x.as_str()) == Some("assistant") {
                 turn_count += 1;
@@ -163,6 +265,10 @@ fn scan_session_tail(path: &Path, first_n: usize, last_n: usize) -> CachedTail {
             }
         }
     }
+    let spawn_label = first_lines
+        .iter()
+        .filter_map(|l| serde_json::from_str::<serde_json::Value>(l).ok())
+        .find_map(|v| extract_spawn_label(&v));
     CachedTail {
         mtime_ms: mtime_ms_v,
         size_bytes,
@@ -170,6 +276,7 @@ fn scan_session_tail(path: &Path, first_n: usize, last_n: usize) -> CachedTail {
         last_lines: tail.into_iter().collect(),
         turn_count,
         last_user_preview,
+        spawn_label,
     }
 }
 
@@ -177,6 +284,19 @@ fn scan_session_tail(path: &Path, first_n: usize, last_n: usize) -> CachedTail {
 fn cached_tail(path: &Path, first_n: usize, last_n: usize) -> CachedTail {
     let cur_mtime = mtime_ms(path);
     let cur_size = file_size(path);
+    cached_tail_with_meta(path, first_n, last_n, cur_mtime, cur_size)
+}
+
+/// Same as `cached_tail` but reuses metadata the caller already stat()'d.
+/// Eliminates two redundant syscalls per session on the list_projects
+/// hot path where the dir walk already read file metadata.
+fn cached_tail_with_meta(
+    path: &Path,
+    first_n: usize,
+    last_n: usize,
+    cur_mtime: u64,
+    cur_size: u64,
+) -> CachedTail {
     {
         let cache = tail_cache_lock();
         if let Some(c) = cache.get(path) {
@@ -221,10 +341,41 @@ struct LiveSession {
 /// currently alive on this machine. Filters out stale state files whose PID
 /// no longer exists. Authoritative for "is this .jsonl actively owned" —
 /// supersedes earlier mtime/heuristic guessing.
+///
+/// Cached behind a 2-second TTL + dir-mtime fingerprint. list_projects()
+/// and list_sessions() both call this on every refresh and previously
+/// re-deserialized every `~/.claude/sessions/*.json` each time — on a
+/// machine with 20+ active claude processes that was 20+ disk reads +
+/// JSON parses per tab switch. The cache reduces steady-state cost to
+/// ~one fstat per call when nothing has changed.
 fn read_live_session_map() -> HashMap<String, LiveSession> {
-    let mut out: HashMap<String, LiveSession> = HashMap::new();
+    // Short TTL is a belt on top of mtime-invalidation: mtime tracking
+    // won't catch changes inside an existing file (rare for state files,
+    // but PIDs reuse on macOS — so we re-check liveness aggressively).
+    const TTL_MS: u128 = 2_000;
+    static CACHE: std::sync::OnceLock<
+        std::sync::Mutex<Option<(std::time::Instant, Option<std::time::SystemTime>, HashMap<String, LiveSession>)>>,
+    > = std::sync::OnceLock::new();
+    let cell = CACHE.get_or_init(|| std::sync::Mutex::new(None));
+
     let dir = claude_sessions_state_dir();
+    let dir_mtime = std::fs::metadata(&dir).and_then(|m| m.modified()).ok();
+
+    if let Ok(guard) = cell.lock() {
+        if let Some((cached_at, cached_mtime, map)) = guard.as_ref() {
+            let fresh = cached_at.elapsed().as_millis() < TTL_MS
+                && *cached_mtime == dir_mtime;
+            if fresh {
+                return map.clone();
+            }
+        }
+    }
+
+    let mut out: HashMap<String, LiveSession> = HashMap::new();
     let Ok(rd) = std::fs::read_dir(&dir) else {
+        if let Ok(mut guard) = cell.lock() {
+            *guard = Some((std::time::Instant::now(), dir_mtime, out.clone()));
+        }
         return out;
     };
     for entry in rd.flatten() {
@@ -256,17 +407,28 @@ fn read_live_session_map() -> HashMap<String, LiveSession> {
         }
         out.insert(session_id, LiveSession { pid, cwd });
     }
+    if let Ok(mut guard) = cell.lock() {
+        *guard = Some((std::time::Instant::now(), dir_mtime, out.clone()));
+    }
     out
 }
 
-/// `kill -0 <pid>` returns 0 if the process exists and we can signal it.
-/// Doesn't actually deliver a signal.
+/// `kill(pid, 0)` direct syscall — returns 0 if the process exists and we
+/// can signal it, -1 otherwise. Doesn't deliver a signal. Previously this
+/// forked `/bin/kill -0 <pid>` which cost ~5ms of subprocess overhead per
+/// live session on every list_projects refresh; switching to the direct
+/// syscall makes it free.
+#[cfg(unix)]
 fn pid_alive(pid: u32) -> bool {
-    std::process::Command::new("kill")
-        .args(["-0", &pid.to_string()])
-        .status()
-        .map(|s| s.success())
-        .unwrap_or(false)
+    // SAFETY: libc::kill with sig=0 is a pure existence check, no signal sent.
+    unsafe { libc::kill(pid as libc::pid_t, 0) == 0 }
+}
+
+#[cfg(not(unix))]
+fn pid_alive(_pid: u32) -> bool {
+    // Windows: be conservative — claim alive. The downstream logic treats
+    // live-status as a best-effort hint, not a safety boundary.
+    true
 }
 
 #[derive(Serialize, Default, Clone)]
@@ -341,6 +503,10 @@ pub struct SessionInfo {
     /// `/command` wrappers, and meta lines). In long sessions this beats
     /// `first_user_preview` for "what am I actually reviewing".
     pub last_user_preview: Option<String>,
+    /// Label for what spawned this session when no real user ask exists
+    /// (subagent / slash-command / Task tool invocations). Frontend uses this
+    /// as a fallback for the card headline instead of "(no user messages)".
+    pub spawn_label: Option<String>,
     pub status: SessionStatus,
     pub turn_count: usize,
     /// True when the last JSONL entry is an `assistant` message that contains
@@ -373,17 +539,39 @@ fn decode_project_key(key: &str) -> String {
 
 /// Read the first JSONL line of any session in a project dir to recover the real cwd.
 /// Each session has `{"type":"system","subtype":"init","cwd":"...","sessionId":"..."}` as the first line.
+/// Derived-cwd cache: the project's cwd is stable (first session's
+/// `cwd` field = project directory), so cache forever per project_dir.
+/// Prior code re-read a full JSONL on every list_projects call — even
+/// multi-MB sessions — just to grab a field in the first 3 lines.
+static CWD_CACHE: LazyLock<Mutex<HashMap<PathBuf, String>>> =
+    LazyLock::new(|| Mutex::new(HashMap::new()));
+
 fn read_cwd_from_session(project_dir: &Path) -> Option<String> {
+    {
+        let cache = CWD_CACHE.lock().unwrap_or_else(|e| e.into_inner());
+        if let Some(cached) = cache.get(project_dir) {
+            return Some(cached.clone());
+        }
+    }
+    use std::io::Read;
+    const HEAD_WINDOW: usize = 16 * 1024;
     let rd = std::fs::read_dir(project_dir).ok()?;
     for entry in rd.flatten() {
         let p = entry.path();
         if p.extension().and_then(|e| e.to_str()) != Some("jsonl") {
             continue;
         }
-        let Ok(text) = std::fs::read_to_string(&p) else {
+        let Ok(mut f) = std::fs::File::open(&p) else {
             continue;
         };
-        for line in text.lines().take(3) {
+        let mut buf = vec![0u8; HEAD_WINDOW];
+        let n = match f.read(&mut buf) {
+            Ok(n) => n,
+            Err(_) => continue,
+        };
+        buf.truncate(n);
+        let head = String::from_utf8_lossy(&buf);
+        for line in head.lines().take(3) {
             if line.trim().is_empty() {
                 continue;
             }
@@ -392,6 +580,8 @@ fn read_cwd_from_session(project_dir: &Path) -> Option<String> {
             };
             if let Some(cwd) = v.get("cwd").and_then(|x| x.as_str()) {
                 if !cwd.is_empty() {
+                    let mut cache = CWD_CACHE.lock().unwrap_or_else(|e| e.into_inner());
+                    cache.insert(project_dir.to_path_buf(), cwd.to_string());
                     return Some(cwd.to_string());
                 }
             }
@@ -461,7 +651,8 @@ fn preview_from_line(line: &str) -> Option<String> {
 }
 
 fn truncate(s: &str, max: usize) -> String {
-    let trimmed = s.trim().replace('\n', " ");
+    let cleaned = strip_ansi_and_noise(s);
+    let trimmed = cleaned.trim().replace('\n', " ");
     if trimmed.chars().count() <= max {
         trimmed
     } else {
@@ -469,6 +660,69 @@ fn truncate(s: &str, max: usize) -> String {
         out.push('…');
         out
     }
+}
+
+/// Strip terminal control sequences + the `<local-command-stdout>`
+/// wrappers that show up in previews for sessions ended with `/compact`
+/// or shell-invoking slash commands. Without this the Monitor tab
+/// displays literal bytes like `[2mCompacted...[22m`, which looks
+/// like garbage text to the user. We handle:
+///   - CSI sequences: `\x1b[...m` (the actual byte-0x1B form)
+///   - Already-rendered `[2m` / `[22m` etc. that lost the ESC on their
+///     way through JSONL round-trips (happens with some claude builds)
+///   - The `<local-command-*>` XML-ish tags themselves (the user
+///     doesn't need to see the plumbing)
+fn strip_ansi_and_noise(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    let bytes = s.as_bytes();
+    let mut i = 0;
+    while i < bytes.len() {
+        // Real ESC-based CSI: 0x1B '[' ... final byte in 0x40..=0x7E
+        if bytes[i] == 0x1B && i + 1 < bytes.len() && bytes[i + 1] == b'[' {
+            i += 2;
+            while i < bytes.len() {
+                let c = bytes[i];
+                i += 1;
+                if (0x40..=0x7E).contains(&c) {
+                    break;
+                }
+            }
+            continue;
+        }
+        // Orphan CSI with the ESC already stripped: "[digits+;m"
+        if bytes[i] == b'[' {
+            let mut j = i + 1;
+            let mut ok = j < bytes.len();
+            while j < bytes.len() {
+                let c = bytes[j];
+                if c.is_ascii_digit() || c == b';' {
+                    j += 1;
+                    continue;
+                }
+                if c == b'm' {
+                    j += 1;
+                    i = j;
+                    ok = true;
+                    break;
+                }
+                ok = false;
+                break;
+            }
+            if ok && j > i + 1 {
+                continue;
+            }
+        }
+        out.push(bytes[i] as char);
+        i += 1;
+    }
+    // Drop the command-echo wrappers entirely — they're diagnostic
+    // plumbing, not conversation content.
+    out = out
+        .replace("<local-command-stdout>", "")
+        .replace("</local-command-stdout>", "")
+        .replace("<local-command-stderr>", "")
+        .replace("</local-command-stderr>", "");
+    out
 }
 
 /// Read the first N non-empty lines of a file cheaply.
@@ -486,6 +740,24 @@ fn truncate(s: &str, max: usize) -> String {
 /// JSONL line, so checking "last block of last conversational assistant line"
 /// is the correct turn-ending signal.
 fn awaiting_user_input(last_lines: &[String]) -> bool {
+    // Compaction detector: if the tail carries a `/compact` echo or the
+    // post-compact "This session is being continued…" summary, the
+    // session is parked waiting for the user's next message, not mid-
+    // generation. Without this the window would fall off the end and
+    // we'd render stale sessions as "GENERATING" indefinitely.
+    for raw in last_lines.iter().rev() {
+        let low = raw.to_ascii_lowercase();
+        if low.contains("<local-command-stdout>")
+            && low.contains("compacted")
+        {
+            return true;
+        }
+        if low.contains("this session is being continued from a previous conversation")
+        {
+            return true;
+        }
+    }
+
     for raw in last_lines.iter().rev() {
         let Ok(v) = serde_json::from_str::<serde_json::Value>(raw) else {
             continue;
@@ -508,12 +780,32 @@ fn awaiting_user_input(last_lines: &[String]) -> bool {
                     .and_then(|t| t.as_str());
                 return last_block_type == Some("text");
             }
-            "user" => return false,
-            // Bookkeeping lines — skip and keep walking back.
+            "user" => {
+                // Only a *real* human ask means Claude is mid-generation.
+                // isMeta command wrappers (`/compact` → `<local-command-stdout>`),
+                // tool_result bridges, and `<system-reminder>` scaffolding are
+                // bookkeeping written after a turn already settled — keep
+                // walking back until we find the last real conversational
+                // turn.
+                if extract_real_user_ask(&v).is_some() {
+                    return false;
+                }
+                continue;
+            }
+            // Other bookkeeping lines (system / summary / file-history-snapshot / result)
             _ => continue,
         }
     }
-    false
+    // Walked off the end of the window without finding a conversational
+    // turn. Previously we returned false here, which made every such
+    // session render as "GENERATING" — wrong and alarming. Default to
+    // true (awaiting-user) when the window had content but no
+    // conversational turn was reachable: if we can't prove claude is
+    // mid-generation from the tail, the safer inference is nothing is
+    // happening. Empty tail still returns false (no info at all is
+    // different from bookkeeping-only tail — preserves the old contract
+    // for the "no sessions yet" path).
+    !last_lines.is_empty()
 }
 
 /// Read the last N non-empty lines.
@@ -528,6 +820,27 @@ fn read_last_lines(path: &Path, n: usize) -> Vec<String> {
         .rev()
         .map(|s| s.to_string())
         .collect()
+}
+
+/// Per-project cached result of the expensive classification loop.
+/// Keyed on (dir_mtime, num_sessions, newest_session_mtime) — if all
+/// three match, we skip the per-session tail reads and return the
+/// cached counts. A stale-write (e.g. claude appending to one session
+/// file) bumps newest_session_mtime, so we never serve wrong data.
+#[derive(Clone)]
+struct ProjectStatusEntry {
+    dir_mtime: Option<std::time::SystemTime>,
+    newest_mtime_ms: u64,
+    session_count: usize,
+    status_counts: StatusCounts,
+}
+
+fn project_status_cache(
+) -> &'static std::sync::Mutex<HashMap<PathBuf, ProjectStatusEntry>> {
+    static CACHE: std::sync::OnceLock<
+        std::sync::Mutex<HashMap<PathBuf, ProjectStatusEntry>>,
+    > = std::sync::OnceLock::new();
+    CACHE.get_or_init(|| std::sync::Mutex::new(HashMap::new()))
 }
 
 pub fn list_projects() -> Vec<ProjectInfo> {
@@ -552,36 +865,82 @@ pub fn list_projects() -> Vec<ProjectInfo> {
             .map(|s| s.to_string())
             .unwrap_or_else(|| cwd.clone());
 
-        // Gather session paths + mtimes first so we can mark the newest one Live
-        // when a claude process is cwd'd to this project.
-        let mut sessions_here: Vec<(PathBuf, u64)> = vec![];
+        // Gather session paths + mtime/size from a single metadata call per
+        // file. Previously this path called `mtime_ms` and then `cached_tail`
+        // (which internally re-stats for mtime + size) — three syscalls per
+        // session on every refresh. Pull both fields from one stat().
+        let mut sessions_here: Vec<(PathBuf, u64, u64)> = vec![];
         if let Ok(child_rd) = std::fs::read_dir(&path) {
             for f in child_rd.flatten() {
                 let p = f.path();
-                if p.extension().and_then(|e| e.to_str()) == Some("jsonl") {
-                    let m = mtime_ms(&p);
-                    sessions_here.push((p, m));
+                if p.extension().and_then(|e| e.to_str()) != Some("jsonl") {
+                    continue;
                 }
+                let Ok(meta) = f.metadata() else { continue };
+                let m = meta
+                    .modified()
+                    .ok()
+                    .and_then(|t| t.duration_since(UNIX_EPOCH).ok())
+                    .map(|d| d.as_millis() as u64)
+                    .unwrap_or(0);
+                sessions_here.push((p, m, meta.len()));
             }
         }
         if sessions_here.is_empty() {
             continue;
         }
         let session_count = sessions_here.len();
-        let newest_mtime = sessions_here.iter().map(|(_, m)| *m).max().unwrap_or(0);
+        let newest_mtime = sessions_here.iter().map(|(_, m, _)| *m).max().unwrap_or(0);
 
-        let mut status_counts = StatusCounts::default();
-        for (p, m) in &sessions_here {
-            let session_id = p.file_stem().and_then(|s| s.to_str()).unwrap_or("");
-            let is_live = live_sessions.contains_key(session_id);
-            let tail = cached_tail(p, 6, 20);
-            match classify_status_from_tail(&tail.last_lines, *m, is_live) {
-                SessionStatus::Live => status_counts.live += 1,
-                SessionStatus::Done => status_counts.done += 1,
-                SessionStatus::Errored => status_counts.errored += 1,
-                SessionStatus::Idle => status_counts.idle += 1,
+        // Cache lookup: if the project dir hasn't grown or shrunk, and the
+        // newest session file hasn't been written to since we last classified,
+        // reuse the previous status counts. Saves N tail-reads per refresh
+        // on idle projects (the common case).
+        let dir_mtime = std::fs::metadata(&path).and_then(|m| m.modified()).ok();
+        let cache_hit = if let Ok(cache) = project_status_cache().lock() {
+            cache.get(&path).and_then(|entry| {
+                if entry.dir_mtime == dir_mtime
+                    && entry.newest_mtime_ms == newest_mtime
+                    && entry.session_count == session_count
+                {
+                    Some(entry.status_counts.clone())
+                } else {
+                    None
+                }
+            })
+        } else {
+            None
+        };
+
+        let status_counts = match cache_hit {
+            Some(cs) => cs,
+            None => {
+                let mut status_counts = StatusCounts::default();
+                for (p, m, size) in &sessions_here {
+                    let session_id = p.file_stem().and_then(|s| s.to_str()).unwrap_or("");
+                    let is_live = live_sessions.contains_key(session_id);
+                    let tail = cached_tail_with_meta(p, 6, 20, *m, *size);
+                    match classify_status_from_tail(&tail.last_lines, *m, is_live) {
+                        SessionStatus::Live => status_counts.live += 1,
+                        SessionStatus::Done => status_counts.done += 1,
+                        SessionStatus::Errored => status_counts.errored += 1,
+                        SessionStatus::Idle => status_counts.idle += 1,
+                    }
+                }
+                if let Ok(mut cache) = project_status_cache().lock() {
+                    cache.insert(
+                        path.clone(),
+                        ProjectStatusEntry {
+                            dir_mtime,
+                            newest_mtime_ms: newest_mtime,
+                            session_count,
+                            status_counts: status_counts.clone(),
+                        },
+                    );
+                }
+                status_counts
             }
-        }
+        };
 
         let is_orka = is_orka_cwd(&cwd);
         out.push(ProjectInfo {
@@ -661,7 +1020,7 @@ pub fn list_sessions(project_key: &str) -> Vec<SessionInfo> {
             continue;
         };
 
-        let tail = cached_tail(&path, 6, 20);
+        let tail = cached_tail(&path, 20, 20);
         let first_user_preview = tail.first_lines.iter().find_map(|l| preview_from_line(l));
         let last_message_preview = tail
             .last_lines
@@ -682,6 +1041,7 @@ pub fn list_sessions(project_key: &str) -> Vec<SessionInfo> {
             first_user_preview,
             last_message_preview,
             last_user_preview: tail.last_user_preview.clone(),
+            spawn_label: tail.spawn_label.clone(),
             status,
             turn_count: tail.turn_count,
             awaiting_user,
@@ -689,6 +1049,67 @@ pub fn list_sessions(project_key: &str) -> Vec<SessionInfo> {
     }
     out.sort_by(|a, b| b.modified_ms.cmp(&a.modified_ms));
     out
+}
+
+/// Look up a single session's metadata by id across every project dir.
+/// Used by the Runs tab's "Open session" link — historic runs may point
+/// to archived sessions that aren't in any cached `list_sessions(project)`
+/// call, so we walk the projects root directly.
+///
+/// Returns `None` if the session id doesn't resolve to a file anywhere
+/// under `~/.claude/projects/`. This is a bounded search (one pass per
+/// project dir) but there's no need to be faster — it only fires when
+/// a user clicks a Run row.
+pub fn find_session_by_id(session_id: &str) -> Option<SessionInfo> {
+    let root = claude_projects_root();
+    let rd = std::fs::read_dir(&root).ok()?;
+    for project_entry in rd.flatten() {
+        let project_dir = project_entry.path();
+        if !project_dir.is_dir() {
+            continue;
+        }
+        let candidate = project_dir.join(format!("{session_id}.jsonl"));
+        if !candidate.is_file() {
+            continue;
+        }
+        // Found it — build the SessionInfo the same way list_sessions does.
+        let project_key = project_dir
+            .file_name()
+            .and_then(|n| n.to_str())?
+            .to_string();
+        let cwd = read_cwd_from_session(&project_dir)
+            .unwrap_or_else(|| decode_project_key(&project_key));
+        let live_sessions = read_live_session_map();
+        let tail = cached_tail(&candidate, 20, 20);
+        let first_user_preview = tail
+            .first_lines
+            .iter()
+            .find_map(|l| preview_from_line(l));
+        let last_message_preview = tail
+            .last_lines
+            .iter()
+            .rev()
+            .find_map(|l| preview_from_line(l));
+        let awaiting_user = awaiting_user_input(&tail.last_lines);
+        let is_live = live_sessions.contains_key(session_id);
+        let status = classify_status_from_tail(&tail.last_lines, tail.mtime_ms, is_live);
+        return Some(SessionInfo {
+            id: session_id.to_string(),
+            path: candidate.to_string_lossy().to_string(),
+            project_key,
+            project_cwd: cwd,
+            modified_ms: tail.mtime_ms,
+            size_bytes: tail.size_bytes,
+            first_user_preview,
+            last_message_preview,
+            last_user_preview: tail.last_user_preview.clone(),
+            spawn_label: tail.spawn_label.clone(),
+            status,
+            turn_count: tail.turn_count,
+            awaiting_user,
+        });
+    }
+    None
 }
 
 pub fn parse_raw_line(raw: &str, line_no: usize) -> Option<SessionLine> {
@@ -719,14 +1140,44 @@ pub fn parse_raw_line(raw: &str, line_no: usize) -> Option<SessionLine> {
 }
 
 pub fn read_session(path: &str) -> Vec<SessionLine> {
+    // Delegate to the paginated variant with "read everything" defaults
+    // so existing call sites keep working while new ones can request a
+    // window.
+    read_session_paginated(path, 0, None)
+}
+
+/// Bounded-memory session read. Skips `offset` lines from the top and
+/// returns at most `limit` parsed lines. When `limit` is None, reads the
+/// full file (legacy behaviour) — callers streaming a giant session
+/// should always pass a limit to avoid slurping 100+ MB into RAM.
+pub fn read_session_paginated(
+    path: &str,
+    offset: usize,
+    limit: Option<usize>,
+) -> Vec<SessionLine> {
+    use std::io::{BufRead, BufReader};
+
     let p = Path::new(path);
-    let Ok(text) = std::fs::read_to_string(p) else {
+    let Ok(f) = std::fs::File::open(p) else {
         return vec![];
     };
-    text.lines()
-        .enumerate()
-        .filter_map(|(i, raw)| parse_raw_line(raw, i))
-        .collect()
+    let reader = BufReader::new(f);
+    let mut out: Vec<SessionLine> = Vec::new();
+    let cap = limit.unwrap_or(usize::MAX);
+
+    for (i, line_res) in reader.lines().enumerate() {
+        if i < offset {
+            continue;
+        }
+        if out.len() >= cap {
+            break;
+        }
+        let Ok(raw) = line_res else { continue };
+        if let Some(line) = parse_raw_line(&raw, i) {
+            out.push(line);
+        }
+    }
+    out
 }
 
 // ---- unified event-driven session tailer -------------------------------------
@@ -1410,6 +1861,95 @@ mod tests {
     #[test]
     fn awaiting_empty_is_false() {
         assert!(!awaiting_user_input(&[]));
+    }
+
+    #[test]
+    fn harness_awaiting_compaction_tail_is_true() {
+        // Real bug: a session that just ran `/compact` sits with a
+        // `<local-command-stdout>Compacted ...</local-command-stdout>`
+        // at the tail and NO assistant text in the visible window. The
+        // walker used to fall off the end and return false → card
+        // displayed "GENERATING" indefinitely. Compaction detector now
+        // short-circuits to true.
+        let lines = vec![
+            r#"{"type":"summary","summary":"session summary here"}"#.to_string(),
+            r#"{"type":"user","isMeta":true,"message":{"role":"user","content":"<command-name>/compact</command-name>"}}"#.to_string(),
+            r#"{"type":"user","isMeta":true,"message":{"role":"user","content":"<local-command-stdout>\u001b[2mCompacted (ctrl+o to see full summary)\u001b[22m</local-command-stdout>"}}"#.to_string(),
+        ];
+        assert!(awaiting_user_input(&lines));
+    }
+
+    #[test]
+    fn harness_awaiting_continuation_marker_is_true() {
+        // Post-compact, claude prepends a system message "This session
+        // is being continued from a previous conversation..." and then
+        // waits for the user. Detected explicitly so the card flips
+        // to FOR-REVIEW immediately.
+        let lines = vec![
+            r#"{"type":"system","subtype":"init","message":{"role":"system","content":"This session is being continued from a previous conversation that ran out of context."}}"#.to_string(),
+        ];
+        assert!(awaiting_user_input(&lines));
+    }
+
+    #[test]
+    fn harness_strip_ansi_escapes_from_preview() {
+        // Bug that leaked `[2m...[22m` into the Monitor tab. Both real
+        // ESC-based CSI and the de-ESC'd orphan form must be stripped.
+        let esc = "\u{001b}[2mCompacted\u{001b}[22m text";
+        let stripped = strip_ansi_and_noise(esc);
+        assert!(!stripped.contains('\u{001b}'), "ESC leaked: {stripped}");
+        assert!(!stripped.contains("[2m"), "[2m leaked: {stripped}");
+        assert!(stripped.contains("Compacted text"), "content dropped: {stripped}");
+
+        let orphan = "[2mCompacted[22m text";
+        let stripped = strip_ansi_and_noise(orphan);
+        assert!(!stripped.contains("[2m"), "orphan CSI leaked: {stripped}");
+        assert!(stripped.contains("Compacted text"), "content dropped: {stripped}");
+    }
+
+    #[test]
+    fn harness_strip_local_command_stdout_wrapper() {
+        let input = "<local-command-stdout>Compacted</local-command-stdout>";
+        let stripped = strip_ansi_and_noise(input);
+        assert_eq!(stripped, "Compacted");
+    }
+
+    #[test]
+    fn harness_strip_preserves_brackets_that_arent_csi() {
+        // Ordinary bracketed text (e.g. [TODO], [note]) must not get
+        // eaten by the CSI-stripper. Only digit+; between `[` and `m`
+        // qualifies as a control sequence.
+        let s = strip_ansi_and_noise("[TODO] check this");
+        assert_eq!(s, "[TODO] check this");
+        let s = strip_ansi_and_noise("array[0] access");
+        assert_eq!(s, "array[0] access");
+    }
+
+    #[test]
+    fn awaiting_skips_compact_command_wrappers() {
+        // After `/compact`, the JSONL tail is:
+        //   ... <real assistant text> ... <isMeta /compact cmd> <local-command-stdout>
+        // Without the isMeta/scaffold filter, the walker treated the
+        // bookkeeping user lines as "human just sent something, claude is
+        // generating" and the card stayed stuck in GENERATING state.
+        let compact_cmd = r#"{"type":"user","isMeta":true,"message":{"role":"user","content":"<command-name>/compact</command-name>"}}"#.to_string();
+        let local_stdout = r#"{"type":"user","isMeta":true,"message":{"role":"user","content":"<local-command-stdout>Compacted</local-command-stdout>"}}"#.to_string();
+        let lines = vec![
+            line_assistant_text("here is my final answer"),
+            compact_cmd,
+            local_stdout,
+        ];
+        assert!(awaiting_user_input(&lines));
+    }
+
+    #[test]
+    fn awaiting_skips_system_reminder_user_wrappers() {
+        // `<system-reminder>` pushed as type:"user" is scaffolding — not a
+        // real ask. Walker should look past it to the previous assistant
+        // text turn.
+        let reminder = r#"{"type":"user","message":{"role":"user","content":"<system-reminder>date changed</system-reminder>"}}"#.to_string();
+        let lines = vec![line_assistant_text("all done"), reminder];
+        assert!(awaiting_user_input(&lines));
     }
 
     #[test]
