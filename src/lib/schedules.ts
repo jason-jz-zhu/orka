@@ -23,6 +23,17 @@ export type Schedule = {
   enabled: boolean;
   notify: boolean;
   sound: boolean;
+  /** Natural-language prompt baked into the schedule. Only meaningful
+   *  for `skill:<slug>` schedules; ignored for legacy canvas pipelines.
+   *  When present, fires with `/<slug>\n\n<prompt>` at run time. */
+  prompt?: string | null;
+  /** Declared-input overrides. Object shape: `{ [name]: string }`.
+   *  Omitted keys fall back to SKILL.md defaults. */
+  inputs?: Record<string, string> | null;
+  /** Human-readable subfolder name under the skill's configured output
+   *  folder. E.g. `daily-0900`. When absent, the backend computes a
+   *  default from `kind` + `spec` at fire time. */
+  label?: string | null;
   last_run_at: number | null;
   next_run_at: number | null;
   history: HistoryEntry[];
@@ -32,19 +43,47 @@ export async function listSchedules(): Promise<Schedule[]> {
   return invokeCmd<Schedule[]>("list_schedules");
 }
 
-export async function getSchedule(name: string): Promise<Schedule | null> {
+export async function listSchedulesForSkill(
+  slug: string,
+): Promise<Schedule[]> {
+  return invokeCmd<Schedule[]>("list_schedules_for_skill", { slug });
+}
+
+export async function getSchedule(
+  name: string,
+  label: string | null = null,
+): Promise<Schedule | null> {
   const r = await invokeCmd<Schedule | null>("get_schedule", {
     pipelineName: name,
+    label,
   });
   return r ?? null;
 }
 
-export async function saveSchedule(s: Schedule): Promise<void> {
-  await invokeCmd<void>("save_schedule", { schedule: s });
+/**
+ * Save a schedule.
+ * @param s          The schedule to persist (must include `label` for
+ *                   multi-schedule-per-skill to work correctly).
+ * @param previousLabel  When editing, the label the schedule had when
+ *                       the editor opened. Null for a brand-new schedule.
+ *                       Used by the backend to clean up a renamed-from
+ *                       file so we don't leak stale ghosts.
+ */
+export async function saveSchedule(
+  s: Schedule,
+  previousLabel: string | null = null,
+): Promise<void> {
+  await invokeCmd<void>("save_schedule", {
+    schedule: s,
+    previousLabel,
+  });
 }
 
-export async function deleteSchedule(name: string): Promise<void> {
-  await invokeCmd<void>("delete_schedule", { pipelineName: name });
+export async function deleteSchedule(
+  name: string,
+  label: string | null = null,
+): Promise<void> {
+  await invokeCmd<void>("delete_schedule", { pipelineName: name, label });
 }
 
 export async function osNotify(title: string, body: string): Promise<void> {
@@ -53,6 +92,14 @@ export async function osNotify(title: string, body: string): Promise<void> {
   } catch {
     /* ignore */
   }
+}
+
+/** Ask the backend for a default schedule label based on kind/spec. */
+export async function computeDefaultLabel(
+  kind: ScheduleKind,
+  spec: ScheduleSpec,
+): Promise<string> {
+  return invokeCmd<string>("compute_default_schedule_label", { kind, spec });
 }
 
 /**
@@ -118,18 +165,22 @@ export function refreshNextRun(s: Schedule, nowMs = Date.now()): Schedule {
   return { ...s, next_run_at: next };
 }
 
-/** Human-friendly text describing a schedule. */
+/** Human-friendly text describing a schedule. Includes a `(paused)`
+ *  suffix when the schedule is disabled so users can see at a glance
+ *  that a schedule exists but isn't firing — the most common way
+ *  "my schedule didn't run" turns out to be "I never turned it on". */
 export function describeSchedule(s: Schedule): string {
   const sp = s.spec as Record<string, number>;
+  const suffix = s.enabled === false ? " (paused)" : "";
   switch (s.kind) {
     case "interval":
-      return `every ${sp.minutes}m`;
+      return `every ${sp.minutes}m${suffix}`;
     case "daily":
-      return `daily ${pad(sp.hour)}:${pad(sp.minute)}`;
+      return `daily ${pad(sp.hour)}:${pad(sp.minute)}${suffix}`;
     case "weekly":
-      return `weekly ${WD[sp.weekday] ?? "?"} ${pad(sp.hour)}:${pad(sp.minute)}`;
+      return `weekly ${WD[sp.weekday] ?? "?"} ${pad(sp.hour)}:${pad(sp.minute)}${suffix}`;
     case "once":
-      return `once @ ${new Date(sp.atMs).toLocaleString()}`;
+      return `once @ ${new Date(sp.atMs).toLocaleString()}${suffix}`;
   }
 }
 

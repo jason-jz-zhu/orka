@@ -7,7 +7,7 @@ import {
   type Edge,
 } from "@xyflow/react";
 import "@xyflow/react/dist/style.css";
-import { useEffect, useRef, useState } from "react";
+import { lazy, Suspense, useEffect, useRef, useState } from "react";
 import { useGraph, type OrkaNode } from "./lib/graph-store";
 import ChatNode from "./nodes/ChatNode";
 import AgentNode from "./nodes/AgentNode";
@@ -17,23 +17,18 @@ import OutputNode from "./nodes/OutputNode";
 import PipelineRefNode from "./nodes/PipelineRefNode";
 import SkillRefNode from "./nodes/SkillRefNode";
 import WorkspaceSwitcher from "./components/WorkspaceSwitcher";
-import PipelineLibrary from "./components/PipelineLibrary";
-import SkillPalette from "./components/SkillPalette";
-import RunsDashboard from "./components/RunsDashboard";
-import SessionDashboard from "./components/SessionDashboard";
+// Lazy — SessionDashboard pulls react-markdown + block renderer. Keeping
+// it off the main chunk cuts cold-start bundle cost for users whose
+// first action isn't the Monitor tab.
+const SessionDashboard = lazy(() => import("./components/SessionDashboard"));
 import StatusBar from "./components/StatusBar";
 import { SkillsTab } from "./components/SkillsTab";
-import { ModelSettingsModal } from "./components/ModelSettingsModal";
 import { usePersistence } from "./lib/persistence";
 import { runAll, requestRunAllSkip } from "./lib/run-all";
-import { invokeCmd } from "./lib/tauri";
-import { alertDialog, confirmDialog, promptDialog } from "./lib/dialogs";
-import OnboardingModal, {
-  hasCompletedOnboarding,
-} from "./components/OnboardingModal";
-import GeneratePipelineModal from "./components/GeneratePipelineModal";
-import SettingsModal from "./components/SettingsModal";
-import ScheduleModal from "./components/ScheduleModal";
+import { invokeCmd, listenEvent } from "./lib/tauri";
+import { parseLine } from "./lib/stream-parser";
+import { alertDialog, promptDialog } from "./lib/dialogs";
+import { hasCompletedOnboarding } from "./lib/onboarding";
 import {
   listSchedules,
   saveSchedule,
@@ -41,7 +36,23 @@ import {
   osNotify,
   type Schedule,
 } from "./lib/schedules";
+
+// Lazy-loaded modules. Split out of the main bundle because they're either
+// only opened on user action (modals) or only mounted when the user
+// switches to a non-default tab (canvas library, runs).
+const PipelineLibrary = lazy(() => import("./components/PipelineLibrary"));
+const SkillPalette = lazy(() => import("./components/SkillPalette"));
+const RunsDashboard = lazy(() => import("./components/RunsDashboard"));
+const ModelSettingsModal = lazy(() =>
+  import("./components/ModelSettingsModal").then((m) => ({
+    default: m.ModelSettingsModal,
+  })),
+);
+const OnboardingModal = lazy(() => import("./components/OnboardingModal"));
+const SettingsModal = lazy(() => import("./components/SettingsModal"));
+const ScheduleModal = lazy(() => import("./components/ScheduleModal"));
 import { playReadyPing } from "./lib/sound";
+import { installPerfGlobals } from "./lib/perf";
 import "./App.css";
 
 const nodeTypes: NodeTypes = {
@@ -86,10 +97,23 @@ export default function App() {
   const [running, setRunning] = useState(false);
   const [runStatus, setRunStatus] = useState<string | null>(null);
   const [tab, setTab] = useState<Tab>("skills");
+  // Latches true on first visit to Monitor. SessionDashboard's first
+  // mount pulls in react-markdown + session chunk; we avoid paying
+  // that cost for users whose first (or only) action is a skill run.
+  // Once opened we keep the subtree mounted (via `hidden`) so state
+  // survives tab switches.
+  const [monitorEverOpened, setMonitorEverOpened] = useState(false);
+  useEffect(() => {
+    if (tab === "monitor") setMonitorEverOpened(true);
+  }, [tab]);
+  // Session id the Runs tab asked us to open. SessionDashboard watches
+  // this prop and auto-selects the matching session when it lands in
+  // its list; cleared after being consumed so re-navigating doesn't
+  // re-trigger the selection.
+  const [pendingSessionOpen, setPendingSessionOpen] = useState<string | null>(null);
   const [showOnboarding, setShowOnboarding] = useState(
     () => !hasCompletedOnboarding()
   );
-  const [showGenerate, setShowGenerate] = useState(false);
   const [showSettings, setShowSettings] = useState(false);
   const [showModels, setShowModels] = useState(false);
   const [canvasEnabled, setCanvasEnabled] = useState<boolean>(() => initialCanvasEnabled());
@@ -105,6 +129,12 @@ export default function App() {
       }
     } catch {}
   }, [canvasEnabled]);
+
+  // Expose window.__ORKA_PERF_SMOKE__() for devtools-driven perf runs.
+  // No-op until the user explicitly invokes it.
+  useEffect(() => {
+    installPerfGlobals();
+  }, []);
 
   /** Called by SkillsTab → SkillRunner when the user wants to open a
    *  composite skill's DAG in the canvas editor. Reveals the Studio
@@ -213,80 +243,6 @@ export default function App() {
     }
   }
 
-  async function writeTemplate(name: string) {
-    const meta = useGraph.getState().pipelineMeta;
-    const stripped = {
-      version: 1,
-      name,
-      description: meta.description ?? "",
-      inputs: meta.inputs ?? [],
-      outputs: meta.outputs ?? [],
-      nodes: nodes.map((n) => {
-        const d = { ...(n.data as any) };
-        delete d.output;
-        delete d.running;
-        delete d.costUsd;
-        delete d.toolCount;
-        delete d.lastSessionId;
-        // OutputNode runtime fields:
-        delete d.lastWrittenPath;
-        delete d.lastWrittenAt;
-        delete d.lastError;
-        return { ...n, data: d };
-      }),
-      edges,
-    };
-    await invokeCmd("save_template", {
-      name,
-      content: JSON.stringify(stripped, null, 2),
-    });
-  }
-
-  async function onSaveTemplate() {
-    // If there is an active pipeline, offer overwrite vs save-as-new.
-    let name: string | null | undefined;
-    if (activePipelineName) {
-      const overwrite = await confirmDialog(
-        `Overwrite active pipeline "${activePipelineName}"?\n\nOK to overwrite, Cancel to save as a new pipeline.`,
-        { title: "Save pipeline", okLabel: "Overwrite", cancelLabel: "Save as new" }
-      );
-      if (overwrite) {
-        name = activePipelineName;
-      } else {
-        name = await promptDialog("New pipeline name:", { title: "Save as new" });
-      }
-    } else {
-      name = await promptDialog("Pipeline name:", { title: "Save pipeline" });
-    }
-    if (!name) return;
-    try {
-      await writeTemplate(name);
-      setActivePipelineName(name);
-      setRunStatus(`saved pipeline "${name}"`);
-      setTimeout(() => setRunStatus(null), 4000);
-    } catch (e) {
-      await alertDialog(`Save failed: ${e}`);
-    }
-  }
-
-  async function onNewPipeline() {
-    // Only confirm if there's something to lose.
-    if (nodes.length > 0 || edges.length > 0) {
-      const ok = await confirmDialog(
-        activePipelineName
-          ? `Discard current canvas and start a new pipeline?\n\n` +
-              `Unsaved changes to "${activePipelineName}" will be lost unless you Save first.`
-          : `Discard current canvas and start a new pipeline?`,
-        { title: "New pipeline", okLabel: "Discard", cancelLabel: "Cancel" }
-      );
-      if (!ok) return;
-    }
-    setGraph([], []);
-    setActivePipelineName(null);
-    setRunStatus("started new pipeline");
-    setTimeout(() => setRunStatus(null), 3000);
-  }
-
   async function loadTemplateByName(name: string) {
     try {
       const raw = await invokeCmd<string>("load_template", { name });
@@ -339,7 +295,7 @@ export default function App() {
           ...target.history.slice(0, 19),
         ],
       };
-      await saveSchedule(refreshNextRun(skipped));
+      await saveSchedule(refreshNextRun(skipped), skipped.label ?? null);
       setRunStatus(
         `⏰ skipped "${target.pipeline_name}" — you're editing "${cur.activePipelineName}"`
       );
@@ -349,6 +305,12 @@ export default function App() {
 
     scheduleRunningRef.current = true;
     setRunStatus(`⏰ running scheduled "${target.pipeline_name}"…`);
+    // Hoisted so the post-run `saveSchedule(updated)` block can back-fill
+    // legacy schedules (target.label === null) with the auto-computed
+    // label. Without this, old-format `skill_<slug>.json` files stay
+    // label-less forever even after firing — they'd never migrate to
+    // the composite-key scheme.
+    let migratedLabel: string | null = target.label ?? null;
     try {
       // Two execution paths depending on what the schedule targets:
       //
@@ -361,14 +323,122 @@ export default function App() {
       if (target.pipeline_name.startsWith("skill:")) {
         const slug = target.pipeline_name.slice("skill:".length);
         const runId = `scheduled-${slug}-${Date.now().toString(36)}`;
-        await invokeCmd("run_agent_node", {
-          id: runId,
-          prompt: `/${slug}`,
-          resumeId: null,
-          addDirs: [],
-          allowedTools: null,
-        });
-        ok = true;
+        // Compose the prompt the same way SkillRunner does — start with
+        // the slash-command, tack on any saved natural-language prompt,
+        // then any declared-input overrides. This keeps scheduled runs
+        // behaviorally identical to manual Run clicks.
+        const parts: string[] = [`/${slug}`];
+        const savedPrompt = target.prompt?.trim();
+        if (savedPrompt) parts.push(savedPrompt);
+        // `inputs` in the run-log JSONL is a flat string[] (backend
+        // RunRecord.inputs: Vec<String>). Anything else — a Record object,
+        // for instance — fails serde deserialization at the Tauri boundary
+        // and the whole append_run call silently errors out. Use the same
+        // "key=value" shape SkillRunner does for manual runs so the two
+        // trigger paths produce identical rows.
+        const inputsSummary: string[] = [];
+        if (savedPrompt) inputsSummary.push(savedPrompt);
+        if (target.inputs && typeof target.inputs === "object") {
+          const lines: string[] = [];
+          for (const [k, v] of Object.entries(target.inputs)) {
+            const val = String(v ?? "").trim();
+            if (val) {
+              lines.push(`${k}: ${val}`);
+              inputsSummary.push(`${k}=${val}`);
+            }
+          }
+          if (lines.length > 0) parts.push(lines.join("\n"));
+        }
+        // Capture session_id from the stream so the Runs row can link
+        // back to the archived session. The `system init` event fires
+        // early in the stream, so by the time run_agent_node resolves
+        // it's populated.
+        let capturedSessionId: string | undefined;
+        const unStream = await listenEvent<string>(
+          `node:${runId}:stream`,
+          (raw) => {
+            if (capturedSessionId) return;
+            for (const ev of parseLine(raw)) {
+              if (ev.kind === "system" && ev.sessionId) {
+                capturedSessionId = ev.sessionId;
+                break;
+              }
+            }
+          },
+        );
+        let capturedWorkdir: string | null = null;
+        try {
+          // Compute a schedule subfolder label. Prefer the user-supplied
+          // label; fall back to a default derived from the schedule's
+          // kind+spec so the output folder is always named something
+          // meaningful even for legacy schedules.
+          let scheduleLabel: string | null = (target.label ?? null) || null;
+          if (!scheduleLabel) {
+            try {
+              scheduleLabel = await invokeCmd<string>(
+                "compute_default_schedule_label",
+                { kind: target.kind, spec: target.spec },
+              );
+            } catch {
+              scheduleLabel = null;
+            }
+          }
+          migratedLabel = scheduleLabel;
+          // Preview the resolved workdir so Runs → 📄 Open works. The
+          // backend will end up producing the same path since we use
+          // the same clock-bucket (minute granularity in templates).
+          try {
+            capturedWorkdir = await invokeCmd<string>("preview_run_workdir", {
+              skillSlug: slug,
+              scheduleLabel,
+              runId,
+              inputs: inputsSummary,
+            });
+          } catch {
+            capturedWorkdir = null;
+          }
+          await invokeCmd("run_agent_node", {
+            id: runId,
+            prompt: parts.join("\n\n"),
+            resumeId: null,
+            addDirs: [],
+            allowedTools: null,
+            skillSlug: slug,
+            scheduleLabel,
+            inputsForTemplate: inputsSummary,
+            // Same rationale as SkillRunner's manual path: pass the
+            // workdir we previewed so the logged `run.workdir` and
+            // the actual cwd agree. Critical for scheduled runs
+            // which often have a user-configured output folder.
+            explicitWorkdir: capturedWorkdir ?? null,
+          });
+          ok = true;
+        } catch (e) {
+          ok = false;
+          error = String(e);
+        } finally {
+          unStream();
+        }
+        // Persist to global Run History (separate from per-schedule
+        // history) so the Runs tab shows scheduled fires alongside
+        // manual ones. Best-effort; a logging failure shouldn't
+        // alter the run result.
+        const endedAt = new Date().toISOString();
+        invokeCmd("append_run", {
+          record: {
+            id: runId,
+            skill: slug,
+            inputs: inputsSummary,
+            started_at: new Date(startedAt).toISOString(),
+            ended_at: endedAt,
+            duration_ms: Date.now() - startedAt,
+            status: ok ? "ok" : "error",
+            trigger: "scheduled",
+            error_message: ok ? undefined : error ?? undefined,
+            session_id: capturedSessionId,
+            workdir: capturedWorkdir ?? undefined,
+          },
+        }).catch((e) => console.warn("append_run failed:", e));
       } else {
         const raw = await invokeCmd<string>("load_template", {
           name: target.pipeline_name,
@@ -406,6 +476,12 @@ export default function App() {
 
     const updated: Schedule = {
       ...target,
+      // Migrate label on first fire: legacy schedules have `label: null`
+      // on disk but used a computed default for their output subfolder
+      // this run. Persisting the computed label now means future fires
+      // and future edits agree on identity, and the schedule file name
+      // migrates to the composite-key convention next save.
+      label: target.label ?? migratedLabel ?? null,
       last_run_at: startedAt,
       history: [
         {
@@ -418,7 +494,11 @@ export default function App() {
         ...target.history.slice(0, 19),
       ],
     };
-    await saveSchedule(refreshNextRun(updated));
+    // previousLabel must reflect the label that identified the file we
+    // just loaded (i.e. target.label, possibly null). Passing
+    // updated.label would confuse save_schedule's rename-cleanup when
+    // we're migrating a legacy file for the first time.
+    await saveSchedule(refreshNextRun(updated), target.label ?? null);
 
     if (target.notify) {
       await osNotify(
@@ -441,14 +521,27 @@ export default function App() {
     setTimeout(() => setRunStatus(null), 6000);
   }
 
+  // Cached view of whether any schedules exist at all. When false we
+  // skip the IPC round-trip in tickSchedules since there's nothing to
+  // fire. Populated on mount + whenever a schedule is saved/deleted
+  // elsewhere (the ScheduleModal's onClose triggers a refetch).
+  const hasAnySchedulesRef = useRef<boolean | null>(null);
+
   async function tickSchedules() {
     if (scheduleRunningRef.current) return;
+    // Fast path for the overwhelmingly common case: no schedules exist.
+    // Without this, the app does one `listSchedules` IPC every 30s forever
+    // even on an idle machine — a measurable waste on low-power laptops.
+    // The first call populates hasAnySchedulesRef; subsequent calls only
+    // do IPC when the ref says "maybe".
+    if (hasAnySchedulesRef.current === false) return;
     let list: Schedule[] = [];
     try {
       list = await listSchedules();
     } catch {
       return;
     }
+    hasAnySchedulesRef.current = list.length > 0;
     setScheduledNames(new Set(list.map((s) => s.pipeline_name)));
     const now = Date.now();
     const due = list.filter(
@@ -457,14 +550,38 @@ export default function App() {
     if (!due.length) return;
     due.sort((a, b) => (a.next_run_at ?? 0) - (b.next_run_at ?? 0));
     await runScheduledPipeline(due[0]);
+    // If more schedules are also due (common when two daily-09:00
+    // schedules exist), re-tick immediately so the second one fires
+    // this cycle rather than being dropped until the next 30s tick.
+    // setTimeout detaches execution so we don't recurse and can't
+    // overwhelm — scheduleRunningRef still gates concurrency.
+    if (due.length > 1) {
+      setTimeout(() => {
+        void tickSchedules();
+      }, 0);
+    }
   }
 
   // Tick every 30s to check for due schedules. Also fires once on mount.
+  // The hasAnySchedulesRef fast-path inside tickSchedules makes this a
+  // no-op on idle machines.
   useEffect(() => {
     tickSchedules();
     const t = setInterval(tickSchedules, 30_000);
     return () => clearInterval(t);
     // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  // When a ScheduleModal closes or a SkillRunner saves a schedule, the
+  // "maybe has schedules" assumption changes. The listeners below are
+  // cheap — they just re-poll on the next tick by invalidating the ref.
+  useEffect(() => {
+    function onScheduleChanged() {
+      hasAnySchedulesRef.current = null;
+    }
+    window.addEventListener("orka:schedule-changed", onScheduleChanged);
+    return () =>
+      window.removeEventListener("orka:schedule-changed", onScheduleChanged);
   }, []);
 
   // One-shot cleanup of ghost brief sessions on app start. Prior builds
@@ -473,17 +590,59 @@ export default function App() {
   // into ~/.claude/projects/. This scan is surgically narrow — only
   // files whose first user message contains the exact brief preamble
   // get deleted — so it's safe to run unconditionally.
+  // First-run demo skill seed. Also idle-deferred so it never blocks
+  // first paint — the user doesn't need the demo available until they
+  // actually open the Skills tab. The backend is idempotent via a
+  // marker file, so repeated calls are free.
   useEffect(() => {
-    (async () => {
-      try {
-        const removed = await invokeCmd<number>("cleanup_ghost_brief_sessions");
-        if (removed > 0) {
-          console.log(`[orka] cleaned up ${removed} ghost brief session file(s)`);
+    const run = () => {
+      void invokeCmd<boolean>("seed_demo_skill_if_first_run").catch(() => {
+        /* best-effort — missing demo isn't worth surfacing */
+      });
+    };
+    const ric = (window as unknown as {
+      requestIdleCallback?: (cb: () => void, opts?: { timeout: number }) => number;
+    }).requestIdleCallback;
+    if (typeof ric === "function") ric(run, { timeout: 5000 });
+    else setTimeout(run, 2000);
+  }, []);
+
+  // One-shot cleanup of ghost brief session files. Deferred off the
+  // critical mount path via requestIdleCallback (falls back to a 2s
+  // setTimeout on platforms without it) — it's a hygiene scan, not
+  // a first-paint-blocking command. Keeps the startup IPC budget
+  // clean.
+  useEffect(() => {
+    const run = () => {
+      void (async () => {
+        try {
+          const removed = await invokeCmd<number>(
+            "cleanup_ghost_brief_sessions",
+          );
+          if (removed > 0) {
+            console.log(
+              `[orka] cleaned up ${removed} ghost brief session file(s)`,
+            );
+          }
+        } catch (e) {
+          console.warn("[orka] ghost cleanup failed:", e);
         }
-      } catch (e) {
-        console.warn("[orka] ghost cleanup failed:", e);
-      }
-    })();
+      })();
+    };
+    const ric = (window as unknown as {
+      requestIdleCallback?: (cb: () => void, opts?: { timeout: number }) => number;
+    }).requestIdleCallback;
+    if (typeof ric === "function") {
+      const h = ric(run, { timeout: 5000 });
+      return () => {
+        const cancel = (window as unknown as {
+          cancelIdleCallback?: (h: number) => void;
+        }).cancelIdleCallback;
+        if (typeof cancel === "function") cancel(h);
+      };
+    }
+    const t = setTimeout(run, 2000);
+    return () => clearTimeout(t);
   }, []);
 
 
@@ -495,19 +654,19 @@ export default function App() {
         <div className="tabs" role="tablist">
           <button
             role="tab"
-            aria-selected={tab === "skills"}
-            className={"tabs__item" + (tab === "skills" ? " tabs__item--active" : "")}
-            onClick={() => setTab("skills")}
-          >
-            Skills
-          </button>
-          <button
-            role="tab"
             aria-selected={tab === "monitor"}
             className={"tabs__item" + (tab === "monitor" ? " tabs__item--active" : "")}
             onClick={() => setTab("monitor")}
           >
             Sessions
+          </button>
+          <button
+            role="tab"
+            aria-selected={tab === "skills"}
+            className={"tabs__item" + (tab === "skills" ? " tabs__item--active" : "")}
+            onClick={() => setTab("skills")}
+          >
+            Skills
           </button>
           <button
             role="tab"
@@ -518,15 +677,27 @@ export default function App() {
             Runs
           </button>
           {canvasEnabled && (
-            <button
+            <div
               role="tab"
               aria-selected={tab === "pipeline"}
-              className={"tabs__item" + (tab === "pipeline" ? " tabs__item--active" : "")}
+              className={"tabs__item tabs__item--closable" + (tab === "pipeline" ? " tabs__item--active" : "")}
               onClick={() => setTab("pipeline")}
-              title="Canvas editor — hidden by default. Visible because ?canvas=1 is set."
+              title="Canvas editor — opened for composite skills. Click × to hide."
             >
-              Studio
-            </button>
+              <span className="tabs__item-label">Studio</span>
+              <button
+                className="tabs__item-close"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  setCanvasEnabled(false);
+                  setTab("skills");
+                }}
+                title="Hide Studio tab"
+                aria-label="Hide Studio tab"
+              >
+                ×
+              </button>
+            </div>
           )}
         </div>
         {tab === "pipeline" && (
@@ -581,80 +752,94 @@ export default function App() {
         </button>
         <span className="toolbar__title">Orka</span>
       </div>
-      {/* All tabs stay mounted; hide the inactive ones with `hidden` (display:none).
-          Keeps SessionDashboard + SkillsTab state + ReactFlow instance alive across switches. */}
+      {/* Skills + Sessions stay mounted (cheap, preserves scroll/filter state).
+          Pipeline canvas + RunsDashboard conditionally mount — ReactFlow in particular
+          is expensive to keep alive when hidden. */}
       <div className="main" hidden={tab !== "skills"}>
         <SkillsTab onOpenInCanvas={openSkillInCanvas} />
       </div>
-      <div className="main" hidden={tab !== "pipeline"}>
-        <div className="sidebar">
-          <PipelineLibrary
-            onLoad={loadTemplateByName}
-            onSaveCurrent={onSaveTemplate}
-            onNew={onNewPipeline}
-            onGenerate={() => setShowGenerate(true)}
-            onSchedule={(name) => setScheduleFor(name)}
-            scheduledNames={scheduledNames}
-          />
-          <SkillPalette />
+      {tab === "pipeline" && (
+        <div className="main">
+          <div className="sidebar">
+            <Suspense fallback={<div className="lazy-fallback">…</div>}>
+              <PipelineLibrary
+                onLoad={loadTemplateByName}
+                onSchedule={(name) => setScheduleFor(name)}
+                scheduledNames={scheduledNames}
+              />
+              <SkillPalette />
+            </Suspense>
+          </div>
+          <div className="canvas">
+            <ReactFlow
+              nodes={nodes}
+              edges={edges}
+              onNodesChange={onNodesChange}
+              onEdgesChange={onEdgesChange}
+              onConnect={onConnect}
+              nodeTypes={nodeTypes}
+              fitView
+              elevateNodesOnSelect
+            >
+              <Background gap={16} />
+              <Controls />
+              <MiniMap pannable zoomable />
+            </ReactFlow>
+          </div>
         </div>
-        <div className="canvas">
-          <ReactFlow
-            nodes={nodes}
-            edges={edges}
-            onNodesChange={onNodesChange}
-            onEdgesChange={onEdgesChange}
-            onConnect={onConnect}
-            nodeTypes={nodeTypes}
-            fitView
-            elevateNodesOnSelect
-          >
-            <Background gap={16} />
-            <Controls />
-            <MiniMap pannable zoomable />
-          </ReactFlow>
+      )}
+      {/* Monitor tab: mount on first visit, then keep alive via `hidden`
+          so internal state (selected session, scroll pos, open drawer)
+          survives tab switches. `monitorEverOpened` latches true on
+          first visit and stays true — we pay the lazy chunk cost once. */}
+      {monitorEverOpened && (
+        <div className="main monitor" hidden={tab !== "monitor"}>
+          <Suspense fallback={<div className="lazy-fallback">…</div>}>
+            <SessionDashboard
+              active={tab === "monitor"}
+              onJumpToPipeline={() => setTab("pipeline")}
+              pendingSessionOpen={pendingSessionOpen}
+              onPendingSessionConsumed={() => setPendingSessionOpen(null)}
+            />
+          </Suspense>
         </div>
-      </div>
-      <div className="main monitor" hidden={tab !== "monitor"}>
-        <SessionDashboard
-          active={tab === "monitor"}
-          onJumpToPipeline={() => setTab("pipeline")}
-        />
-      </div>
-      <div className="main" hidden={tab !== "runs"}>
-        <RunsDashboard />
-      </div>
+      )}
+      {tab === "runs" && (
+        <div className="main">
+          <Suspense fallback={<div className="lazy-fallback">…</div>}>
+            <RunsDashboard
+              onOpenSession={(sid) => {
+                // Jump to Sessions tab and ask SessionDashboard to open
+                // this session's detail drawer. Cleared after consumption.
+                setPendingSessionOpen(sid);
+                setTab("monitor");
+              }}
+            />
+          </Suspense>
+        </div>
+      )}
       {tab === "pipeline" && <StatusBar />}
-      {showOnboarding && (
-        <OnboardingModal onClose={() => setShowOnboarding(false)} />
-      )}
-      {showGenerate && (
-        <GeneratePipelineModal
-          onClose={() => setShowGenerate(false)}
-          onApplied={() => {
-            setShowGenerate(false);
-            setTab("pipeline");
-            setRunStatus("✨ pipeline ready — click ▶ Run All to execute in order");
-            setTimeout(() => setRunStatus(null), 8000);
-          }}
-        />
-      )}
-      {scheduleFor && (
-        <ScheduleModal
-          pipelineName={scheduleFor}
-          onClose={() => {
-            setScheduleFor(null);
-            // Refresh indicator immediately after the modal closes.
-            tickSchedules();
-          }}
-        />
-      )}
-      {showSettings && (
-        <SettingsModal onClose={() => setShowSettings(false)} />
-      )}
-      {showModels && (
-        <ModelSettingsModal onClose={() => setShowModels(false)} />
-      )}
+      <Suspense fallback={null}>
+        {showOnboarding && (
+          <OnboardingModal onClose={() => setShowOnboarding(false)} />
+        )}
+        {scheduleFor && (
+          <ScheduleModal
+            pipelineName={scheduleFor}
+            onClose={() => {
+              setScheduleFor(null);
+              // Refresh indicator immediately after the modal closes.
+              tickSchedules();
+            }}
+          />
+        )}
+        {showSettings && (
+          <SettingsModal onClose={() => setShowSettings(false)} />
+        )}
+        {showModels && (
+          <ModelSettingsModal onClose={() => setShowModels(false)} />
+        )}
+      </Suspense>
     </div>
   );
 }
