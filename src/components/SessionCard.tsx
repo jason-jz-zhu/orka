@@ -7,7 +7,7 @@ import { SessionBriefCard } from "./SessionBriefCard";
 
 export type CardState = "generating" | "for-review" | "reviewed" | "errored" | "idle";
 
-function stateOf(session: SessionInfo, isReviewed: boolean): CardState {
+export function stateOf(session: SessionInfo, isReviewed: boolean): CardState {
   if (session.status === "errored") return "errored";
   if (session.status === "live") {
     if (!session.awaiting_user) return "generating";

@@ -124,14 +124,21 @@ export function SessionBriefCard({
         jobHandleRef.current = scheduleBriefJob(async () => {
           console.log(`[session-brief] auto-gen starting: ${sessionId}`);
           try {
-            const brief = await invokeCmd<SessionBrief>("generate_session_brief", {
-              sessionId,
-              sessionPath,
-            });
-            if (mountedRef.current && !cancelled) {
-              console.log(`[session-brief] auto-gen OK: ${sessionId}`);
-              setState({ kind: "ready", brief });
+            const brief = await invokeCmd<SessionBrief | null>(
+              "generate_session_brief",
+              { sessionId, sessionPath },
+            );
+            if (!mountedRef.current || cancelled) return;
+            if (!brief) {
+              // Backend returned no brief (unreachable in prod, but a
+              // permissive test stub or race can hit it). Falling back
+              // to idle keeps the card interactive instead of crashing
+              // on a null destructure.
+              setState({ kind: "idle" });
+              return;
             }
+            console.log(`[session-brief] auto-gen OK: ${sessionId}`);
+            setState({ kind: "ready", brief });
           } catch (e) {
             // Surface the error: previously we silently fell back to
             // idle which made "why didn't it auto-brief?" impossible
@@ -156,11 +163,16 @@ export function SessionBriefCard({
   async function generateNow() {
     setState({ kind: "generating" });
     try {
-      const brief = await invokeCmd<SessionBrief>("generate_session_brief", {
-        sessionId,
-        sessionPath,
-      });
-      if (mountedRef.current) setState({ kind: "ready", brief });
+      const brief = await invokeCmd<SessionBrief | null>(
+        "generate_session_brief",
+        { sessionId, sessionPath },
+      );
+      if (!mountedRef.current) return;
+      if (!brief) {
+        setState({ kind: "idle" });
+        return;
+      }
+      setState({ kind: "ready", brief });
     } catch (e) {
       if (mountedRef.current)
         setState({ kind: "error", message: String(e) });
@@ -176,10 +188,26 @@ export function SessionBriefCard({
 
   const klass = `session-brief${compact ? " session-brief--compact" : ""}`;
 
+  // Shared pre-ready skeleton. Fills the same vertical footprint the
+  // final brief will take so the card doesn't reflow when the brief
+  // arrives. Used for both "loading" (checking cache) and
+  // "generating" (Haiku actively summarising) states; the footer
+  // label differentiates them.
+  function skeletonContent(label: string) {
+    return (
+      <>
+        <div className="session-brief__skeleton session-brief__skeleton--headline" />
+        <div className="session-brief__skeleton session-brief__skeleton--body" />
+        <div className="session-brief__skeleton session-brief__skeleton--body" />
+        <div className="session-brief__status session-brief__status--inline">{label}</div>
+      </>
+    );
+  }
+
   if (state.kind === "loading") {
     return (
       <div className={klass}>
-        <div className="session-brief__status">…</div>
+        {skeletonContent("Loading brief…")}
       </div>
     );
   }
@@ -205,7 +233,7 @@ export function SessionBriefCard({
   if (state.kind === "generating") {
     return (
       <div className={klass}>
-        <div className="session-brief__status">⏳ Summarizing…</div>
+        {skeletonContent("⏳ Summarizing…")}
       </div>
     );
   }

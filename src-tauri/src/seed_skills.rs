@@ -35,12 +35,21 @@ const DEMOS: &[Demo] = &[
             "../../docs/examples/repo-health-check/SKILL.md"
         ),
     },
+    // Foundational: without this skill, brand-new users have no path
+    // to author their own skills — they'd have to hand-write SKILL.md.
+    // The canonical copy lives in the repo at skills/orka-skill-builder/
+    // but the repo tree isn't part of an installed .app bundle, so we
+    // bake the bytes into the binary via include_str!.
+    Demo {
+        slug: "orka-skill-builder",
+        skill_md: include_str!("../../skills/orka-skill-builder/SKILL.md"),
+    },
 ];
 
 /// Bump when DEMOS changes content or gains entries. Existing users
 /// who saw the old marker file get re-seeded for any missing demos
 /// (without touching demos they've already edited — see `seed_one`).
-const SEED_VERSION: &str = "v2";
+const SEED_VERSION: &str = "v3";
 
 fn orka_dir() -> Option<PathBuf> {
     dirs::home_dir().map(|h| h.join(".orka"))
@@ -51,12 +60,12 @@ fn seed_marker() -> Option<PathBuf> {
 }
 
 fn legacy_markers() -> Vec<PathBuf> {
-    // Older versions used `.seeded-v1`. If we find it, we're dealing
-    // with a user who got the v1 seed (repo-tldr only) — we still
-    // want to add v2's new demos, but skip any slug they may have
-    // since customized.
+    // Older versions used `.seeded-v1` (repo-tldr only) and `.seeded-v2`
+    // (added repo-health-check). v3 adds orka-skill-builder. If we find
+    // ANY prior marker, backfill missing demos; the per-slug existence
+    // check in `seed_one` keeps us from stomping user edits.
     orka_dir()
-        .map(|d| vec![d.join(".seeded-v1")])
+        .map(|d| vec![d.join(".seeded-v1"), d.join(".seeded-v2")])
         .unwrap_or_default()
 }
 
@@ -182,6 +191,27 @@ mod tests {
     }
 
     #[test]
+    fn harness_bundled_skill_builder_parses() {
+        // Regression: v3 shipped without orka-skill-builder bundled, so
+        // fresh installs had no path to author new skills. This locks
+        // the foundational skill into the seed list.
+        let entry = DEMOS
+            .iter()
+            .find(|d| d.slug == "orka-skill-builder")
+            .expect("DEMOS must include orka-skill-builder");
+        let parsed = crate::skill_md::parse_skill_md_str(entry.skill_md)
+            .expect("bundled orka-skill-builder SKILL.md must parse");
+        assert_eq!(parsed.name, "orka-skill-builder");
+        // The skill is long-form guidance (~250 lines of prose); a
+        // truncated version would silently ship a broken onboarding.
+        assert!(
+            parsed.raw_body.len() > 2000,
+            "bundled orka-skill-builder body looks too short: {} bytes",
+            parsed.raw_body.len()
+        );
+    }
+
+    #[test]
     fn harness_health_check_has_composite_graph() {
         // Critical contract: the demo pipeline must actually be a
         // DAG, not just prose. A broken graph block would fall back
@@ -220,10 +250,14 @@ mod tests {
     }
 
     #[test]
-    fn harness_two_demos_registered() {
-        // Guard against a refactor accidentally dropping a demo.
-        assert_eq!(DEMOS.len(), 2);
-        assert_eq!(DEMOS[0].slug, "repo-tldr");
-        assert_eq!(DEMOS[1].slug, "repo-health-check");
+    fn harness_expected_demos_registered() {
+        // Guard against a refactor accidentally dropping or reordering
+        // a demo. Adding a new demo requires updating this list AND
+        // bumping SEED_VERSION so existing users get it backfilled.
+        let slugs: Vec<&str> = DEMOS.iter().map(|d| d.slug).collect();
+        assert_eq!(
+            slugs,
+            vec!["repo-tldr", "repo-health-check", "orka-skill-builder"],
+        );
     }
 }

@@ -1,0 +1,5 @@
+{"type":"system","subtype":"init","cwd":"/tmp/orka-e2e-compacted","sessionId":"compacted-001"}
+{"type":"user","message":{"role":"user","content":"add a test for the parser"}}
+{"type":"assistant","message":{"content":[{"type":"text","text":"Test added and passing."}]}}
+{"type":"user","isMeta":true,"message":{"role":"user","content":"<command-name>/compact</command-name>"}}
+{"type":"user","isMeta":true,"message":{"role":"user","content":"<local-command-stdout>Compacted (ctrl+o to see full summary)</local-command-stdout>"}}

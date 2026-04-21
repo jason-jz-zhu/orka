@@ -1,0 +1,4 @@
+{"type":"system","subtype":"init","cwd":"/tmp/orka-e2e-recap","sessionId":"recap-001"}
+{"type":"user","message":{"role":"user","content":"build the pipeline"}}
+{"type":"assistant","message":{"content":[{"type":"text","text":"Pipeline built."}]}}
+{"type":"user","userType":"external","entrypoint":"cli","message":{"role":"user","content":"※ recap: Built the end-to-end ETL pipeline with three stages; all smoke tests pass. Next: wire up the Grafana dashboard."}}
