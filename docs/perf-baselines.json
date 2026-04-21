@@ -1,0 +1,10 @@
+{
+  "_comment": "p95 budgets in milliseconds for Orka hot paths. Probe names match src/perf_smoke.rs exactly. At low iteration counts the first cold-cache call dominates p95 — budgets are set above that to avoid flakes while still catching 2x+ regressions. Run with `npm run perf:check -- 20` for tighter numbers. Source of truth: docs/TESTING-PLAN.md.",
+  "budgets": {
+    "list_projects": { "p95_ms": 300 },
+    "list_sessions[first_project]": { "p95_ms": 500 },
+    "scan_skills_dirs": { "p95_ms": 100 },
+    "scan_skills_dirs[cold]": { "p95_ms": 100 },
+    "model_for_brief": { "p95_ms": 50 }
+  }
+}

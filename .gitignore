@@ -29,6 +29,11 @@ src-tauri/target/
 Cargo.lock.bak
 **/*.rs.bk
 
+# Playwright E2E run outputs (per-run screenshots, HTML report).
+# Regenerated on every `npm run test:e2e`; nothing in here should ship.
+test-results/
+playwright-report/
+
 # Tauri
 src-tauri/gen/
 

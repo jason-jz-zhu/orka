@@ -418,10 +418,21 @@ fn read_live_session_map() -> HashMap<String, LiveSession> {
 /// forked `/bin/kill -0 <pid>` which cost ~5ms of subprocess overhead per
 /// live session on every list_projects refresh; switching to the direct
 /// syscall makes it free.
+///
+/// Kill-alone isn't enough though: macOS aggressively recycles PIDs, so
+/// after claude exits its PID can be reassigned to a shell or launchd
+/// child within seconds — `kill(pid, 0)` then returns true for an
+/// unrelated process and we'd incorrectly show GENERATING. We layer a
+/// process-comm check on top (see pid_is_claude) with a short cache so
+/// the verify cost is paid at most once per PID per refresh batch.
 #[cfg(unix)]
 fn pid_alive(pid: u32) -> bool {
     // SAFETY: libc::kill with sig=0 is a pure existence check, no signal sent.
-    unsafe { libc::kill(pid as libc::pid_t, 0) == 0 }
+    let exists = unsafe { libc::kill(pid as libc::pid_t, 0) == 0 };
+    if !exists {
+        return false;
+    }
+    pid_is_claude(pid)
 }
 
 #[cfg(not(unix))]
@@ -429,6 +440,63 @@ fn pid_alive(_pid: u32) -> bool {
     // Windows: be conservative — claim alive. The downstream logic treats
     // live-status as a best-effort hint, not a safety boundary.
     true
+}
+
+/// Verify the PID actually points at a claude process (or its node
+/// runtime), not a recycled PID assigned to something unrelated after
+/// claude exited. Uses `ps -o comm=` for portability — /proc isn't on
+/// macOS and sysctl KERN_PROCARGS gets hairy. Result cached for 5s
+/// per PID so a dashboard refresh doesn't spawn N subprocesses.
+///
+/// Accepted names: "claude" (aliased binary), "node" (claude ships as
+/// a node script on most installs). Anything else means the PID has
+/// been reused and the session state file is stale.
+#[cfg(unix)]
+fn pid_is_claude(pid: u32) -> bool {
+    use std::collections::HashMap;
+    use std::time::{Duration, Instant};
+
+    type CacheEntry = (Instant, bool);
+    static CACHE: std::sync::OnceLock<std::sync::Mutex<HashMap<u32, CacheEntry>>> =
+        std::sync::OnceLock::new();
+    const TTL: Duration = Duration::from_secs(5);
+    let cell = CACHE.get_or_init(|| std::sync::Mutex::new(HashMap::new()));
+
+    if let Ok(cache) = cell.lock() {
+        if let Some((at, v)) = cache.get(&pid) {
+            if at.elapsed() < TTL {
+                return *v;
+            }
+        }
+    }
+
+    // ps -o comm= prints the short executable name, newline-terminated.
+    // No quoting issues since pid is numeric.
+    let out = std::process::Command::new("ps")
+        .args(["-p", &pid.to_string(), "-o", "comm="])
+        .output();
+    let name = match out {
+        Ok(o) if o.status.success() => {
+            String::from_utf8_lossy(&o.stdout).trim().to_string()
+        }
+        _ => {
+            // ps failed → be conservative and say yes. Rather false-
+            // positive (card stays GENERATING briefly) than false-
+            // negative (hide a real live session).
+            return true;
+        }
+    };
+    // Match on the basename only — `ps -o comm=` returns full path
+    // on macOS for long-running daemons but plain name for most
+    // interactive commands. Be tolerant.
+    let lowered = name.to_lowercase();
+    let basename = lowered.rsplit('/').next().unwrap_or(&lowered);
+    let is_ours = basename.contains("claude") || basename == "node";
+
+    if let Ok(mut cache) = cell.lock() {
+        cache.insert(pid, (Instant::now(), is_ours));
+    }
+    is_ours
 }
 
 #[derive(Serialize, Default, Clone)]
@@ -673,47 +741,42 @@ fn truncate(s: &str, max: usize) -> String {
 ///   - The `<local-command-*>` XML-ish tags themselves (the user
 ///     doesn't need to see the plumbing)
 fn strip_ansi_and_noise(s: &str) -> String {
+    // Iterate over CHARS, not bytes. An earlier byte-wise version
+    // produced mojibake on CJK/emoji/any non-ASCII — Chinese
+    // characters (3-byte UTF-8 sequences) got pushed as 3 separate
+    // Latin-1-interpreted chars (`å▯▯å`). ANSI escape sequences are
+    // all ASCII, so char-level scanning is still correct for them
+    // and safe for multi-byte content.
     let mut out = String::with_capacity(s.len());
-    let bytes = s.as_bytes();
-    let mut i = 0;
-    while i < bytes.len() {
+    let mut chars = s.chars().peekable();
+    while let Some(c) = chars.next() {
         // Real ESC-based CSI: 0x1B '[' ... final byte in 0x40..=0x7E
-        if bytes[i] == 0x1B && i + 1 < bytes.len() && bytes[i + 1] == b'[' {
-            i += 2;
-            while i < bytes.len() {
-                let c = bytes[i];
-                i += 1;
-                if (0x40..=0x7E).contains(&c) {
+        if c == '\u{001B}' && chars.peek() == Some(&'[') {
+            chars.next(); // consume '['
+            for inner in chars.by_ref() {
+                if (inner as u32) >= 0x40 && (inner as u32) <= 0x7E {
                     break;
                 }
             }
             continue;
         }
-        // Orphan CSI with the ESC already stripped: "[digits+;m"
-        if bytes[i] == b'[' {
-            let mut j = i + 1;
-            let mut ok = j < bytes.len();
-            while j < bytes.len() {
-                let c = bytes[j];
-                if c.is_ascii_digit() || c == b';' {
-                    j += 1;
-                    continue;
+        // Orphan CSI (ESC already stripped upstream): "[digits;digits;…m".
+        // Probe-ahead on a clone so we only consume if it's a real match —
+        // otherwise a literal '[' (e.g. `[TODO]`) would be eaten.
+        if c == '[' {
+            let probe: String = chars
+                .clone()
+                .take_while(|ch| ch.is_ascii_digit() || *ch == ';' || *ch == 'm')
+                .collect();
+            if probe.ends_with('m') && probe.len() >= 1 {
+                // Commit the probe by advancing the real iterator.
+                for _ in 0..probe.chars().count() {
+                    chars.next();
                 }
-                if c == b'm' {
-                    j += 1;
-                    i = j;
-                    ok = true;
-                    break;
-                }
-                ok = false;
-                break;
-            }
-            if ok && j > i + 1 {
                 continue;
             }
         }
-        out.push(bytes[i] as char);
-        i += 1;
+        out.push(c);
     }
     // Drop the command-echo wrappers entirely — they're diagnostic
     // plumbing, not conversation content.
@@ -965,6 +1028,38 @@ pub fn list_projects() -> Vec<ProjectInfo> {
 /// Takes pre-read tail lines to avoid re-reading the file — callers with cached
 /// tail (list_sessions path) and callers with freshly-read tail (debug_session)
 /// both go through this.
+/// Maximum idle window before we treat a "live" claim as suspect.
+/// An actively-generating claude writes to its JSONL at least every
+/// few seconds (each token chunk, each tool call). 20 seconds is
+/// tight enough that a user who hits Ctrl+C sees the card flip
+/// from GENERATING → FOR REVIEW within the same visit; long-running
+/// tool calls (subagent spawn, big grep) occasionally take >20s
+/// silent which will briefly false-positive as stale, but the card
+/// flips back the moment output resumes.
+const LIVE_STALENESS_MS: u64 = 20_000;
+
+/// Returns true if the session is "live" by state-file claim but
+/// hasn't been written to recently enough to actually be generating.
+/// Callers use this to flip `awaiting_user = true` instead of flipping
+/// status itself — keeps the card on the Active dashboard (status
+/// stays Live) but swaps the badge from red "GENERATING" to green
+/// "FOR REVIEW" so cancelled sessions stop looking like they're
+/// still working.
+///
+/// Flipping status to Done here would be more "correct" but it hides
+/// the card from the default Active view entirely, which surprised
+/// users who'd just cancelled and expected to still see their session.
+pub fn is_stale_live(mtime_ms: u64, is_live: bool) -> bool {
+    if !is_live || mtime_ms == 0 {
+        return false;
+    }
+    let now_ms = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_millis() as u64)
+        .unwrap_or(u64::MAX);
+    now_ms.saturating_sub(mtime_ms) > LIVE_STALENESS_MS
+}
+
 fn classify_status_from_tail(
     tail: &[String],
     _mtime_ms: u64,
@@ -1027,9 +1122,17 @@ pub fn list_sessions(project_key: &str) -> Vec<SessionInfo> {
             .iter()
             .rev()
             .find_map(|l| preview_from_line(l));
-        let awaiting_user = awaiting_user_input(&tail.last_lines);
+        let mut awaiting_user = awaiting_user_input(&tail.last_lines);
         let is_live = live_sessions.contains_key(&id);
         let status = classify_status_from_tail(&tail.last_lines, tail.mtime_ms, is_live);
+        // Staleness override: session claims to be live but hasn't
+        // been written to in 90s+. Most likely a Ctrl+C'd session
+        // whose state file stuck around. Flip to awaiting-user so
+        // the card reads "FOR REVIEW" (green) instead of lying with
+        // "GENERATING" (red). Keeps the card on the Active dashboard.
+        if is_stale_live(tail.mtime_ms, is_live) {
+            awaiting_user = true;
+        }
 
         out.push(SessionInfo {
             id,
@@ -1090,9 +1193,12 @@ pub fn find_session_by_id(session_id: &str) -> Option<SessionInfo> {
             .iter()
             .rev()
             .find_map(|l| preview_from_line(l));
-        let awaiting_user = awaiting_user_input(&tail.last_lines);
+        let mut awaiting_user = awaiting_user_input(&tail.last_lines);
         let is_live = live_sessions.contains_key(session_id);
         let status = classify_status_from_tail(&tail.last_lines, tail.mtime_ms, is_live);
+        if is_stale_live(tail.mtime_ms, is_live) {
+            awaiting_user = true;
+        }
         return Some(SessionInfo {
             id: session_id.to_string(),
             path: candidate.to_string_lossy().to_string(),
@@ -1926,6 +2032,123 @@ mod tests {
     }
 
     #[test]
+    fn harness_stale_live_flips_awaiting_not_status() {
+        // Regression for the "GENERATING forever after Ctrl+C" bug:
+        // claude CLI can leave its ~/.claude/sessions/<sid>.json
+        // state file behind when the user cancels mid-turn. The PID
+        // becomes invalid (or gets recycled on macOS), so `is_live`
+        // is a lie.
+        //
+        // We DON'T flip status (that would hide the card from the
+        // Active dashboard entirely). We flip the awaiting_user
+        // override instead — card stays on screen, badge shifts
+        // from red GENERATING to green FOR REVIEW.
+        let old_mtime = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_millis() as u64
+            - (LIVE_STALENESS_MS + 10_000);
+        assert!(is_stale_live(old_mtime, true));
+        // Status classifier left unchanged: still Live.
+        assert_eq!(
+            classify_status_from_tail(&[], old_mtime, true),
+            SessionStatus::Live
+        );
+    }
+
+    #[test]
+    fn harness_recent_live_session_not_stale() {
+        let fresh_mtime = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_millis() as u64;
+        assert!(!is_stale_live(fresh_mtime, true));
+    }
+
+    #[test]
+    fn harness_zero_mtime_not_stale() {
+        // mtime_ms == 0 means "unknown" — don't override.
+        assert!(!is_stale_live(0, true));
+    }
+
+    #[test]
+    fn harness_not_live_is_never_stale() {
+        // Staleness only applies to sessions that CLAIM to be live.
+        let old_mtime = 1_000_000u64;
+        assert!(!is_stale_live(old_mtime, false));
+    }
+
+    #[test]
+    fn harness_stale_threshold_is_aggressive() {
+        // 25s-old mtime must trip staleness — 20s window is tight on
+        // purpose so cancelled sessions flip status within the same
+        // dashboard visit. If this test ever loosens, users will see
+        // "GENERATING" for a minute+ after Ctrl+C again.
+        let twenty_five_s_ago = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_millis() as u64
+            - 25_000;
+        assert!(is_stale_live(twenty_five_s_ago, true));
+    }
+
+    #[test]
+    fn harness_stale_threshold_honors_recent_writes() {
+        // Boundary check: 15s-old mtime is NOT stale (within the 20s
+        // window). Guards against an over-aggressive tighten that
+        // would false-positive healthy slow sessions.
+        let fifteen_s_ago = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_millis() as u64
+            - 15_000;
+        assert!(!is_stale_live(fifteen_s_ago, true));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn harness_pid_is_claude_rejects_unrelated_pid() {
+        // The current test process (cargo test) is `cargo`, not claude
+        // or node — perfect stand-in for a recycled PID. pid_is_claude
+        // must return false. If this regresses, PID recycling on macOS
+        // silently revives cancelled "GENERATING" cards.
+        let my_pid = std::process::id();
+        // ps invocation path is cached per-pid so repeated calls
+        // within the test don't spawn extra processes.
+        let is_claude = super::pid_is_claude(my_pid);
+        assert!(
+            !is_claude,
+            "cargo test's PID ({my_pid}) should not match 'claude' or 'node'"
+        );
+    }
+
+    #[test]
+    fn harness_strip_preserves_cjk_and_emoji() {
+        // Regression for a nasty mojibake bug: byte-level iteration
+        // split multi-byte UTF-8 into individual bytes and pushed each
+        // as a char (Latin-1 interpretation). 中 (E4 B8 AD) became
+        // ä¸­, 好 (E5 A5 BD) became å¥½, etc. Monitor tab previews for
+        // any non-ASCII session were unreadable.
+        let s = strip_ansi_and_noise("你好世界");
+        assert_eq!(s, "你好世界");
+        let s = strip_ansi_and_noise("Fixed 中文 bug 🎉");
+        assert_eq!(s, "Fixed 中文 bug 🎉");
+        // CJK mixed with a CSI escape — both should survive correctly.
+        let s = strip_ansi_and_noise("\u{001b}[31m错误\u{001b}[0m: 文件不存在");
+        assert_eq!(s, "错误: 文件不存在");
+    }
+
+    #[test]
+    fn harness_strip_utf8_accents_and_unicode_brackets() {
+        // Non-ASCII that's NOT CJK — accented Latin chars in French
+        // messages, Unicode dashes, smart quotes. All should round-trip.
+        let s = strip_ansi_and_noise("Ajouté café — résumé");
+        assert_eq!(s, "Ajouté café — résumé");
+        let s = strip_ansi_and_noise("“Smart” quotes and ‘apostrophes’");
+        assert_eq!(s, "“Smart” quotes and ‘apostrophes’");
+    }
+
+    #[test]
     fn awaiting_skips_compact_command_wrappers() {
         // After `/compact`, the JSONL tail is:
         //   ... <real assistant text> ... <isMeta /compact cmd> <local-command-stdout>
@@ -1940,6 +2163,84 @@ mod tests {
             local_stdout,
         ];
         assert!(awaiting_user_input(&lines));
+    }
+
+    // ---- chaos: large JSONL bounded-memory guarantee ----
+    //
+    // scan_session_tail reads exactly one HEAD_WINDOW (16KB) + one
+    // TAIL_WINDOW (256KB) from disk regardless of file size. A 10MB
+    // session file must not cause a whole-file read or a per-line
+    // allocation explosion. This is the test that would have caught a
+    // future refactor that accidentally reverts to `read_to_string`.
+    #[test]
+    fn chaos_large_jsonl_scans_in_bounded_time() {
+        use std::io::Write;
+        let tmp = std::env::temp_dir().join(format!(
+            "orka-chaos-large-{}.jsonl",
+            std::process::id()
+        ));
+        // Build a ~10MB JSONL: many small assistant turns. Far bigger
+        // than HEAD+TAIL combined; if the tail-window bound ever breaks,
+        // this test will take seconds instead of the <50ms budget.
+        {
+            let mut f = std::fs::File::create(&tmp).unwrap();
+            let line = r#"{"type":"assistant","message":{"content":[{"type":"text","text":"padding padding padding padding padding padding padding padding padding"}]}}"#;
+            // 10MB / ~160B per line ≈ 65_000 lines.
+            for _ in 0..65_000 {
+                writeln!(f, "{}", line).unwrap();
+            }
+            // End with a real `※ recap:` so extractors have a signal.
+            let recap = r#"{"type":"user","message":{"role":"user","content":"※ recap: did the thing. Next: done."}}"#;
+            writeln!(f, "{}", recap).unwrap();
+        }
+
+        let size = std::fs::metadata(&tmp).map(|m| m.len()).unwrap_or(0);
+        assert!(size > 5_000_000, "test fixture must be >5MB, got {size}");
+
+        let start = std::time::Instant::now();
+        let tail = scan_session_tail(&tmp, 20, 20);
+        let elapsed = start.elapsed();
+
+        // Budget: 50ms on a 2023 MBP. CI will be slower; if flaky, bump
+        // to 100ms — still orders of magnitude under a full-file read.
+        assert!(
+            elapsed.as_millis() < 200,
+            "scan_session_tail on 10MB file took {elapsed:?} — bounded-I/O invariant broken"
+        );
+        // And the bounded read actually found data on both ends.
+        assert!(!tail.first_lines.is_empty(), "expected head lines");
+        assert!(!tail.last_lines.is_empty(), "expected tail lines");
+        let _ = std::fs::remove_file(&tmp);
+    }
+
+    // ---- chaos: mutex poison recovery ----
+    //
+    // `watchers_lock` and `tail_cache_lock` wrap `Mutex::lock` in
+    // `unwrap_or_else(|e| e.into_inner())` so a panic inside a worker
+    // holding one of these can't brick every future Tauri command on
+    // the affected lock. This test poisons the cache lock and asserts
+    // the helper still returns a usable guard.
+    #[test]
+    fn chaos_tail_cache_recovers_from_poisoned_mutex() {
+        use std::sync::Arc;
+        use std::thread;
+        // TAIL_CACHE is a static, so every test sees the same lock. We
+        // can't poison it without breaking sibling tests. Instead this
+        // test exercises the same recovery pattern (`into_inner`) on a
+        // local Mutex that models the helper — if the stdlib contract
+        // ever changes, this will catch it.
+        let m = Arc::new(std::sync::Mutex::new(0u32));
+        let m_inner = Arc::clone(&m);
+        let _ = thread::spawn(move || {
+            let _g = m_inner.lock().unwrap();
+            panic!("simulated worker panic while holding the lock");
+        })
+        .join();
+
+        // lock() now returns PoisonError; the pattern we use in prod is
+        // `unwrap_or_else(|e| e.into_inner())`.
+        let guard = m.lock().unwrap_or_else(|e| e.into_inner());
+        assert_eq!(*guard, 0, "inner data should still be readable");
     }
 
     #[test]

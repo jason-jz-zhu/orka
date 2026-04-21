@@ -90,20 +90,157 @@ fn mtime_ms(path: &Path) -> u64 {
 }
 
 /// Return the cached brief if it exists AND the underlying JSONL hasn't
-/// changed since it was generated. Returns None when no cache or the
-/// source file has moved on — caller should then call generate.
+/// changed since it was generated. If no cache is available, tries to
+/// derive a zero-cost brief from Claude Code's own `/recap` output
+/// (v2.1.108+) embedded in the session JSONL — that path wins over an
+/// LLM call because it's Claude's own authoritative summary, free, and
+/// regeneratable anytime. Returns None only when neither source is
+/// available; caller then falls back to `generate_session_brief`.
 #[tauri::command]
 pub async fn get_session_brief(
     session_id: String,
     session_path: String,
 ) -> Result<Option<SessionBrief>, String> {
     let store = load_store().await;
-    let Some(brief) = store.briefs.get(&session_id) else { return Ok(None) };
     let current = mtime_ms(Path::new(&session_path));
-    if current == 0 || current != brief.source_mtime_ms {
-        return Ok(None);
+    if let Some(brief) = store.briefs.get(&session_id) {
+        if current != 0 && current == brief.source_mtime_ms {
+            return Ok(Some(brief.clone()));
+        }
     }
-    Ok(Some(brief.clone()))
+    // No fresh cache — try Claude Code's native /recap output before
+    // spending an LLM call. Not written to the cache: it's cheap to
+    // re-extract and the JSONL is the source of truth.
+    if current != 0 {
+        if let Some(brief) = try_recap_brief(
+            Path::new(&session_path),
+            &session_id,
+            current,
+        ) {
+            return Ok(Some(brief));
+        }
+    }
+    Ok(None)
+}
+
+/// Try to build a SessionBrief from Claude Code's `/recap` output embedded
+/// in the JSONL. Returns None if no recap line is present.
+///
+/// Claude Code v2.1.108+ writes `/recap` results back into the session
+/// stream as `type:"user"` lines whose content string starts with
+/// `※ recap:`. We detect that prefix, strip it, and split the remainder
+/// on the literal `Next:` marker (recap format is consistently
+/// `<summary>. Next: <follow-up>`).
+fn try_recap_brief(
+    path: &Path,
+    session_id: &str,
+    mtime: u64,
+) -> Option<SessionBrief> {
+    let raw = extract_latest_recap_text(path)?;
+    let parsed = parse_recap_body(&raw)?;
+    Some(SessionBrief {
+        session_id: session_id.to_string(),
+        you_were: parsed.you_were,
+        progress: parsed.progress,
+        next_likely: parsed.next_likely,
+        source_mtime_ms: mtime,
+        generated_at: chrono::Utc::now().to_rfc3339(),
+    })
+}
+
+/// Walk the JSONL from end to start looking for the most recent user
+/// line whose content begins with `※ recap:`. Reads the tail window
+/// only — same bounded I/O discipline as `extract_transcript`.
+fn extract_latest_recap_text(path: &Path) -> Option<String> {
+    use std::io::{Read, Seek, SeekFrom};
+    const TAIL_WINDOW: u64 = 256 * 1024;
+    let mut f = std::fs::File::open(path).ok()?;
+    let size = f.metadata().ok()?.len();
+    let content = if size > TAIL_WINDOW {
+        let start = size - TAIL_WINDOW;
+        f.seek(SeekFrom::Start(start)).ok()?;
+        let mut buf = Vec::with_capacity(TAIL_WINDOW as usize);
+        f.read_to_end(&mut buf).ok()?;
+        let first_nl = buf.iter().position(|&b| b == b'\n').unwrap_or(0);
+        String::from_utf8_lossy(&buf[first_nl + 1..]).into_owned()
+    } else {
+        let mut s = String::new();
+        f.read_to_string(&mut s).ok()?;
+        s
+    };
+    for raw in content.lines().rev().filter(|l| !l.trim().is_empty()) {
+        let Ok(v) = serde_json::from_str::<serde_json::Value>(raw) else {
+            continue;
+        };
+        if v.get("type").and_then(|t| t.as_str()) != Some("user") {
+            continue;
+        }
+        let Some(content) = v.get("message").and_then(|m| m.get("content")) else {
+            continue;
+        };
+        let text = extract_text_from_content(content);
+        let trimmed = text.trim_start();
+        if let Some(body) = trimmed.strip_prefix("※ recap:") {
+            let body = body.trim();
+            if !body.is_empty() {
+                return Some(body.to_string());
+            }
+        }
+    }
+    None
+}
+
+struct ParsedRecap {
+    you_were: String,
+    progress: String,
+    next_likely: String,
+}
+
+/// Split a recap body (everything after `※ recap:`) into the three
+/// SessionBrief fields.
+///
+/// Format observed in Claude Code 2.1.108+: `<summary sentences>. Next: <followup>`.
+/// We treat the first clause (up to the first `;` or `.` or `。`) as the
+/// headline, the rest of the summary as progress, and text after the last
+/// `Next:` marker as the follow-up prediction.
+fn parse_recap_body(body: &str) -> Option<ParsedRecap> {
+    // Collapse whitespace — recap is line-wrapped in the terminal but
+    // lives as a single-line JSON string with soft wraps already
+    // preserved as literal newlines/spaces.
+    let flat = body
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ");
+    if flat.is_empty() {
+        return None;
+    }
+
+    // Split off `Next: …` tail if present. Case-sensitive because
+    // Claude Code always emits `Next:`; lowercase `next:` could match
+    // incidental prose.
+    let (before_next, next_likely) = match flat.rfind("Next:") {
+        Some(i) => (flat[..i].trim_end_matches('.').trim(), flat[i + 5..].trim()),
+        None => (flat.as_str(), ""),
+    };
+
+    // Headline: first clause of the "before_next" half.
+    let split_idx = before_next
+        .find(';')
+        .or_else(|| before_next.find('.'))
+        .or_else(|| before_next.find('。'));
+    let (headline, rest) = match split_idx {
+        Some(i) => (before_next[..i].trim().to_string(), before_next[i + 1..].trim().to_string()),
+        None => (before_next.trim().to_string(), String::new()),
+    };
+
+    if headline.is_empty() {
+        return None;
+    }
+    Some(ParsedRecap {
+        you_were: headline,
+        progress: rest,
+        next_likely: next_likely.to_string(),
+    })
 }
 
 /// Produce a fresh brief by sending the session tail to `claude -p` with
@@ -479,5 +616,38 @@ mod tests {
             { "type": "text", "text": "world" }
         ]);
         assert_eq!(extract_text_from_content(&v).trim(), "hello  world");
+    }
+
+    #[test]
+    fn recap_parses_claude_code_canonical_shape() {
+        // Verbatim shape from a real Claude Code 2.1.108+ `/recap` output.
+        let body = "Built an iterative video-editing agent pipeline (Split → Compose loops) and integrated TrevorTWX taste-brain patterns; Phase B best score went from 6.7 to 7.8 on Sintel. Next: run it on a second video to validate the lift generalizes.";
+        let p = parse_recap_body(body).unwrap();
+        assert_eq!(p.you_were, "Built an iterative video-editing agent pipeline (Split → Compose loops) and integrated TrevorTWX taste-brain patterns");
+        assert!(p.progress.contains("Phase B best score"));
+        assert_eq!(p.next_likely, "run it on a second video to validate the lift generalizes.");
+    }
+
+    #[test]
+    fn recap_collapses_soft_wraps() {
+        // /recap output arrives line-wrapped in the terminal; we join on
+        // whitespace so the fields don't contain preserved newlines.
+        let body = "Fixed A\n  and B; did C.\n  Next: test D.";
+        let p = parse_recap_body(body).unwrap();
+        assert_eq!(p.you_were, "Fixed A and B");
+        assert_eq!(p.next_likely, "test D.");
+    }
+
+    #[test]
+    fn recap_without_next_leaves_field_empty() {
+        let p = parse_recap_body("Did one thing. Did another.").unwrap();
+        assert_eq!(p.you_were, "Did one thing");
+        assert_eq!(p.next_likely, "");
+    }
+
+    #[test]
+    fn recap_empty_body_rejected() {
+        assert!(parse_recap_body("").is_none());
+        assert!(parse_recap_body("   \n  ").is_none());
     }
 }

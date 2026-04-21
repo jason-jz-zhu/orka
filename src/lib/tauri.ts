@@ -57,6 +57,15 @@ async function browserFallback<T>(
   cmd: string,
   args?: Record<string, unknown>
 ): Promise<T> {
+  // E2E hook: Playwright sets `window.__ORKA_E2E__` to a synchronous
+  // command resolver so specs can inject fixture data without running
+  // a real Tauri backend. Keys are command names; values are handlers
+  // that receive the args and return the payload.
+  type E2EStubs = Record<string, (args?: Record<string, unknown>) => unknown>;
+  const e2e = (window as unknown as { __ORKA_E2E__?: E2EStubs }).__ORKA_E2E__;
+  if (e2e && Object.prototype.hasOwnProperty.call(e2e, cmd)) {
+    return e2e[cmd](args) as T;
+  }
   if (cmd === "run_node" || cmd === "run_agent_node") {
     const id = (args?.id as string) ?? "?";
     const prompt = (args?.prompt as string) ?? "";
