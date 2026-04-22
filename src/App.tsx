@@ -43,6 +43,9 @@ import {
 const PipelineLibrary = lazy(() => import("./components/PipelineLibrary"));
 const SkillPalette = lazy(() => import("./components/SkillPalette"));
 const RunsDashboard = lazy(() => import("./components/RunsDashboard"));
+const TodayDashboard = lazy(() =>
+  import("./components/TodayDashboard").then((m) => ({ default: m.TodayDashboard })),
+);
 const ModelSettingsModal = lazy(() =>
   import("./components/ModelSettingsModal").then((m) => ({
     default: m.ModelSettingsModal,
@@ -65,7 +68,7 @@ const nodeTypes: NodeTypes = {
   skill_ref: SkillRefNode as any,
 };
 
-type Tab = "skills" | "pipeline" | "monitor" | "runs";
+type Tab = "today" | "skills" | "pipeline" | "monitor" | "runs";
 
 /** Read initial canvas visibility from URL (?canvas=1) or a localStorage
  *  flag that persists across restarts once the user opts in once. */
@@ -654,6 +657,14 @@ export default function App() {
         <div className="tabs" role="tablist">
           <button
             role="tab"
+            aria-selected={tab === "today"}
+            className={"tabs__item" + (tab === "today" ? " tabs__item--active" : "")}
+            onClick={() => setTab("today")}
+          >
+            Today
+          </button>
+          <button
+            role="tab"
             aria-selected={tab === "monitor"}
             className={"tabs__item" + (tab === "monitor" ? " tabs__item--active" : "")}
             onClick={() => setTab("monitor")}
@@ -786,6 +797,19 @@ export default function App() {
               <MiniMap pannable zoomable />
             </ReactFlow>
           </div>
+        </div>
+      )}
+      {tab === "today" && (
+        <div className="main">
+          <Suspense fallback={<div className="lazy-fallback">…</div>}>
+            <TodayDashboard
+              onOpenSession={(sid) => {
+                setPendingSessionOpen(sid);
+                setTab("monitor");
+              }}
+              onJumpToRuns={() => setTab("runs")}
+            />
+          </Suspense>
         </div>
       )}
       {/* Monitor tab: mount on first visit, then keep alive via `hidden`
