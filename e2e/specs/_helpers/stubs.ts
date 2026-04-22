@@ -1,11 +1,16 @@
 import type { Page } from "@playwright/test";
 
 /**
- * Navigate to the Sessions tab. The Skills tab is the default landing
- * view, so every session-dashboard spec needs this flip first.
+ * Navigate to the Workforce tab (Claude Code sessions). The Skills tab
+ * is the default landing view, so every session-dashboard spec needs
+ * this flip first.
+ *
+ * Label is "Workforce" per the operator-layer positioning; the
+ * underlying tab key stays `"monitor"` so persisted UI state and
+ * analytics keep working across the rename.
  */
 export async function openSessionsTab(page: Page): Promise<void> {
-  await page.getByRole("tab", { name: "Sessions" }).click();
+  await page.getByRole("tab", { name: "Workforce" }).click();
 }
 
 export type ProjectInfo = {

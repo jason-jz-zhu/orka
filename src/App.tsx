@@ -43,9 +43,9 @@ import {
 const PipelineLibrary = lazy(() => import("./components/PipelineLibrary"));
 const SkillPalette = lazy(() => import("./components/SkillPalette"));
 const RunsDashboard = lazy(() => import("./components/RunsDashboard"));
-const TodayDashboard = lazy(() =>
-  import("./components/TodayDashboard").then((m) => ({ default: m.TodayDashboard })),
-);
+// Morning ribbon is cheap and always visible — no lazy load benefit
+// and delaying it would flash the chips in mid-session.
+import { MorningRibbon } from "./components/MorningRibbon";
 const ModelSettingsModal = lazy(() =>
   import("./components/ModelSettingsModal").then((m) => ({
     default: m.ModelSettingsModal,
@@ -68,7 +68,7 @@ const nodeTypes: NodeTypes = {
   skill_ref: SkillRefNode as any,
 };
 
-type Tab = "today" | "skills" | "pipeline" | "monitor" | "runs";
+type Tab = "skills" | "pipeline" | "monitor" | "runs";
 
 /** Read initial canvas visibility from URL (?canvas=1) or a localStorage
  *  flag that persists across restarts once the user opts in once. */
@@ -651,25 +651,29 @@ export default function App() {
 
   return (
     <div className="app">
+      {/* Morning ribbon: always-visible "standup" strip. Replaces the
+          earlier Today tab — it kept duplicating Sessions/Runs content
+          in exchange for a nav slot. The ribbon delivers the same
+          operator-at-a-glance awareness without burning the slot. */}
+      <MorningRibbon
+        onJumpToSessions={() => setTab("monitor")}
+        onJumpToRuns={() => setTab("runs")}
+      />
       <div className="toolbar">
         <WorkspaceSwitcher />
         <div className="toolbar__divider" />
         <div className="tabs" role="tablist">
           <button
             role="tab"
-            aria-selected={tab === "today"}
-            className={"tabs__item" + (tab === "today" ? " tabs__item--active" : "")}
-            onClick={() => setTab("today")}
-          >
-            Today
-          </button>
-          <button
-            role="tab"
             aria-selected={tab === "monitor"}
             className={"tabs__item" + (tab === "monitor" ? " tabs__item--active" : "")}
             onClick={() => setTab("monitor")}
+            // Tab key stays `"monitor"` for persistence / analytics
+            // compatibility; only the user-visible label flips to the
+            // operator-narrative wording.
+            title="Live Claude Code sessions — your workforce"
           >
-            Sessions
+            Workforce
           </button>
           <button
             role="tab"
@@ -761,7 +765,12 @@ export default function App() {
         >
           ⚙︎
         </button>
-        <span className="toolbar__title">Orka</span>
+        <div className="toolbar__brand">
+          <span className="toolbar__title">Orka</span>
+          <span className="toolbar__tagline">
+            the operator layer for your digital workforce
+          </span>
+        </div>
       </div>
       {/* Skills + Sessions stay mounted (cheap, preserves scroll/filter state).
           Pipeline canvas + RunsDashboard conditionally mount — ReactFlow in particular
@@ -797,19 +806,6 @@ export default function App() {
               <MiniMap pannable zoomable />
             </ReactFlow>
           </div>
-        </div>
-      )}
-      {tab === "today" && (
-        <div className="main">
-          <Suspense fallback={<div className="lazy-fallback">…</div>}>
-            <TodayDashboard
-              onOpenSession={(sid) => {
-                setPendingSessionOpen(sid);
-                setTab("monitor");
-              }}
-              onJumpToRuns={() => setTab("runs")}
-            />
-          </Suspense>
         </div>
       )}
       {/* Monitor tab: mount on first visit, then keep alive via `hidden`

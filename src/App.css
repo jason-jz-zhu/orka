@@ -5909,141 +5909,60 @@ h5.block-card__heading, h6.block-card__heading { font-size: 11px; color: #8a92a0
   vertical-align: middle;
 }
 
+
 /* ============================================================
-   Today tab — morning-digest view.
-   Positions Orka as the operator layer for the user's agents:
-   show what ran overnight, what needs review, what's pinned.
+   Morning Ribbon + operator-narrative brand
+   ------------------------------------------------------------
+   Thin "standup" strip across the top of the app. Replaces the
+   short-lived Today tab — same awareness, no navigation cost.
    ============================================================ */
-.today {
-  padding: 18px 22px;
-  max-width: 960px;
-  margin: 0 auto;
-}
-.today__header {
-  margin-bottom: 18px;
-}
-.today__title {
-  font-size: 22px;
-  font-weight: 600;
-  margin: 0 0 4px;
-}
-.today__subtitle {
-  font-size: 12px;
-  opacity: 0.6;
-  letter-spacing: 0.02em;
-}
-.today__empty {
-  padding: 28px;
-  border: 1px dashed rgba(255, 255, 255, 0.12);
-  border-radius: 10px;
-  text-align: center;
-  color: rgba(255, 255, 255, 0.55);
-  font-size: 13px;
-}
-.today__kpis {
-  display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(180px, 1fr));
-  gap: 10px;
-  margin-bottom: 22px;
-}
-.today__kpi {
-  padding: 12px 14px;
-  border: 1px solid rgba(255, 255, 255, 0.08);
-  border-radius: 8px;
-  background: rgba(255, 255, 255, 0.02);
-}
-.today__kpi-value {
-  font-size: 18px;
-  font-weight: 600;
-  margin-bottom: 2px;
-}
-.today__kpi-label {
-  font-size: 11px;
-  opacity: 0.6;
-  letter-spacing: 0.04em;
-  text-transform: uppercase;
-}
-.today__section {
-  margin-bottom: 22px;
-}
-.today__section-head {
+.morning-ribbon {
   display: flex;
   align-items: center;
-  gap: 8px;
-  margin-bottom: 8px;
-  font-size: 13px;
+  gap: 6px;
+  padding: 6px 14px;
+  background: rgba(255, 255, 255, 0.025);
+  border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+  font-size: 12px;
 }
-.today__section-icon {
-  font-size: 14px;
+.morning-ribbon__chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 3px 9px;
+  border-radius: 99px;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  background: rgba(255, 255, 255, 0.03);
+  color: inherit;
+  font-size: 12px;
+  cursor: pointer;
+  transition: background 80ms ease, opacity 80ms ease;
 }
-.today__section-label {
+.morning-ribbon__chip:hover {
+  background: rgba(255, 255, 255, 0.08);
+}
+.morning-ribbon__chip--dim {
+  opacity: 0.42;
+}
+.morning-ribbon__count {
   font-weight: 600;
+  font-variant-numeric: tabular-nums;
+}
+.morning-ribbon__label {
+  opacity: 0.7;
   letter-spacing: 0.02em;
 }
-.today__section-count {
-  font-size: 11px;
-  padding: 1px 7px;
-  border-radius: 99px;
-  background: rgba(255, 255, 255, 0.08);
-  opacity: 0.75;
+
+.toolbar__brand {
+  display: inline-flex;
+  flex-direction: column;
+  align-items: flex-end;
+  line-height: 1.15;
+  margin-left: 8px;
 }
-.today__see-all {
-  margin-left: auto;
-  background: none;
-  border: none;
-  font-size: 11px;
-  color: inherit;
-  opacity: 0.5;
-  cursor: pointer;
-}
-.today__see-all:hover {
-  opacity: 0.9;
-}
-.today__list {
-  list-style: none;
-  margin: 0;
-  padding: 0;
-  border: 1px solid rgba(255, 255, 255, 0.06);
-  border-radius: 8px;
-  overflow: hidden;
-}
-.today__row {
-  display: grid;
-  grid-template-columns: auto 1fr auto;
-  gap: 12px;
-  align-items: center;
-  padding: 10px 14px;
-  border-top: 1px solid rgba(255, 255, 255, 0.05);
-  font-size: 13px;
-  cursor: pointer;
-  transition: background 80ms ease;
-}
-.today__row:first-child {
-  border-top: none;
-}
-.today__row:hover {
-  background: rgba(255, 255, 255, 0.04);
-}
-.today__row--run.today__row--errored .today__row-primary::before {
-  content: "✗ ";
-  color: #ff6b6b;
-}
-.today__row--run.today__row--ok .today__row-primary::before {
-  content: "✓ ";
-  color: #4ade80;
-}
-.today__row-primary {
-  font-weight: 500;
-  white-space: nowrap;
-}
-.today__row-snippet {
-  opacity: 0.65;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-.today__row-meta {
+.toolbar__tagline {
+  font-size: 10px;
   opacity: 0.55;
-  font-size: 11px;
+  letter-spacing: 0.02em;
   white-space: nowrap;
 }
