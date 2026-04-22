@@ -28,7 +28,7 @@ describe("MorningRibbon", () => {
     });
   });
 
-  it("renders four chips with zero counts on an empty workspace", async () => {
+  it("renders three chips with zero counts on an empty workspace", async () => {
     render(
       <MorningRibbon onJumpToSessions={() => {}} onJumpToRuns={() => {}} />,
     );
@@ -37,13 +37,19 @@ describe("MorningRibbon", () => {
     });
     expect(screen.getByText("awaiting")).toBeInTheDocument();
     expect(screen.getByText("pinned")).toBeInTheDocument();
-    expect(screen.getByText("this week")).toBeInTheDocument();
+    // The weekly stat only renders when there's activity — empty
+    // workspace should not show it.
+    expect(screen.queryByText(/runs this week/)).toBeNull();
     // Empty workspace → every chip shows "0".
     const zeros = screen.getAllByText("0");
-    expect(zeros.length).toBe(4);
+    expect(zeros.length).toBe(3);
   });
 
-  it("routes overnight + weekly chips to Runs, awaiting + pinned chips to Sessions", async () => {
+  it("routes overnight to Runs, awaiting + pinned to Sessions (no duplicate targets)", async () => {
+    // Regression: an earlier iteration had a "this week" chip that
+    // also routed to Runs — two chips fighting for the same
+    // destination is a UX bug. Each clickable chip should go somewhere
+    // unique.
     const onJumpToSessions = vi.fn();
     const onJumpToRuns = vi.fn();
     render(
@@ -56,11 +62,10 @@ describe("MorningRibbon", () => {
       expect(screen.getByText("overnight")).toBeInTheDocument();
     });
     await userEvent.click(screen.getByText("overnight"));
-    await userEvent.click(screen.getByText("this week"));
     await userEvent.click(screen.getByText("awaiting"));
     await userEvent.click(screen.getByText("pinned"));
 
-    expect(onJumpToRuns).toHaveBeenCalledTimes(2);
+    expect(onJumpToRuns).toHaveBeenCalledTimes(1);
     expect(onJumpToSessions).toHaveBeenCalledTimes(2);
   });
 });

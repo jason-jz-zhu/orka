@@ -107,17 +107,31 @@ export function MorningRibbon({ onJumpToSessions, onJumpToRuns }: Props) {
         onClick={onJumpToSessions}
         title={`${buckets.pinned.length} pinned session(s) — click to open the Workforce`}
       />
-      <Chip
-        icon="📊"
-        count={buckets.weekly.totalRuns}
-        label="this week"
-        onClick={onJumpToRuns}
-        title={
-          buckets.weekly.topSkill
-            ? `${buckets.weekly.totalRuns} runs across ${buckets.weekly.distinctSkills} skills this week. Top: ${buckets.weekly.topSkill.skill} (${buckets.weekly.topSkill.count}×)`
-            : `${buckets.weekly.totalRuns} runs this week`
-        }
-      />
+      {/* Weekly stats live as an ambient, non-clickable trailing label.
+          Earlier iteration had this as a 4th chip that jumped to Runs,
+          but "overnight" already owned that destination — two chips with
+          the same click target is a UX bug. Keep the number visible;
+          drop the click. */}
+      {buckets.weekly.totalRuns > 0 && (
+        <span
+          className="morning-ribbon__stats"
+          title={
+            buckets.weekly.topSkill
+              ? `Top skill this week: ${buckets.weekly.topSkill.skill} (${buckets.weekly.topSkill.count}×)`
+              : `${buckets.weekly.totalRuns} runs in the last 7 days`
+          }
+        >
+          <span className="morning-ribbon__stats-value">
+            {buckets.weekly.totalRuns}
+          </span>
+          <span className="morning-ribbon__stats-label">
+            runs this week
+            {buckets.weekly.topSkill
+              ? ` · top ${buckets.weekly.topSkill.skill}`
+              : ""}
+          </span>
+        </span>
+      )}
     </div>
   );
 }
