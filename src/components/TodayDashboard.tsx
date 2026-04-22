@@ -48,16 +48,24 @@ export function TodayDashboard({ onOpenSession, onJumpToRuns }: Props) {
   const [sessions, setSessions] = useState<SessionInfo[]>([]);
 
   // Pinned session ids live in the graph store as SessionNodes.
-  const pinned = useGraph((s) => {
+  //
+  // CRITICAL: the selector must return a stable reference for unchanged
+  // state. Building the Set inside the selector returns a fresh
+  // reference every call, which zustand's default `===` equality sees
+  // as a change → infinite re-render loop ("Maximum update depth
+  // exceeded"). We subscribe to `nodes` (stable from the store) and
+  // derive the Set in a useMemo keyed on that reference.
+  const nodes = useGraph((s) => s.nodes);
+  const pinned = useMemo(() => {
     const out = new Set<string>();
-    for (const n of s.nodes) {
+    for (const n of nodes) {
       if (n.type === "session") {
         const sid = (n.data as { sessionId?: string }).sessionId;
         if (sid) out.add(sid);
       }
     }
     return out;
-  });
+  }, [nodes]);
 
   // Pull sessions the same way SessionDashboard does: list_projects →
   // list_sessions per project. Rust caches the tail scans so the
