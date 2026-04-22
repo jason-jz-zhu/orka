@@ -142,6 +142,16 @@ export async function installSessionStubs(page: Page, opts: Options) {
         get_session_brief: () => null,
         generate_session_brief: () => null,
         clear_session_brief: () => null,
+        // Resolve a session id to its SessionInfo from the fixture list.
+        // This powers the Logbook meeting flow, which looks a run's
+        // session_id up via this Tauri command.
+        find_session_by_id: (args) => {
+          const sid = (args as { sessionId?: string; session_id?: string } | undefined)
+            ?.sessionId ??
+            (args as { session_id?: string } | undefined)?.session_id;
+          if (!sid) return null;
+          return sessions.find((s) => s.id === sid) ?? null;
+        },
         list_schedules: () => [],
         onboarding_status: () => ({
           claude_installed: true,

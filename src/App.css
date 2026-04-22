@@ -6097,3 +6097,25 @@ h5.block-card__heading, h6.block-card__heading { font-size: 11px; color: #8a92a0
   font-size: 11px;
   opacity: 0.85;
 }
+
+/* Runs-dashboard meeting selection — mirrors the Workforce tab's
+   checkbox+bar so the two tabs feel like one system. */
+.runs-dash__select-col {
+  width: 28px;
+}
+.runs-dash__select-cell input[type="checkbox"] {
+  width: 14px;
+  height: 14px;
+  accent-color: #a855f7;
+  cursor: pointer;
+}
+.runs-dash__select-cell input[type="checkbox"]:disabled {
+  cursor: not-allowed;
+  opacity: 0.35;
+}
+.runs-dash__row--selected {
+  background: rgba(168, 85, 247, 0.06);
+}
+.runs-dash__meeting-bar {
+  margin: 10px 16px 0;
+}

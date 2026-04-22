@@ -1,8 +1,11 @@
 import { lazy, memo, Suspense, useCallback, useEffect, useRef, useState } from "react";
 import { useRuns, type RunRecord } from "../lib/runs";
+import type { SessionInfo } from "../lib/session-types";
 import { invokeCmd } from "../lib/tauri";
 import { alertDialog, confirmDialog } from "../lib/dialogs";
-import { openSessionInTerminal } from "../lib/terminal-config";
+import { TerminalLaunchButton } from "./TerminalLaunchButton";
+import { MeetingModal } from "./MeetingModal";
+import { meetingSessionIdsForRuns } from "../lib/run-meeting";
 // Lazy so the OutputAnnotator + markdown renderer only load when the
 // user opens the drawer — idle Runs tab stays lightweight.
 const RunDetailDrawer = lazy(() => import("./RunDetailDrawer"));
@@ -18,6 +21,51 @@ export default function RunsDashboard({ onOpenSession }: Props = {}) {
   const { runs, loading, refresh } = useRuns();
   const [clearing, setClearing] = useState(false);
   const [activeRun, setActiveRun] = useState<RunRecord | null>(null);
+
+  // "Call a meeting across these runs" — same operator-narrative flow
+  // as the Workforce tab, applied to past deliverables. Tracks the
+  // selected run ids; only runs that persisted a session_id can join
+  // a meeting (pure `claude -p` runs have no resumable tail).
+  const [selectedRunIds, setSelectedRunIds] = useState<Set<string>>(new Set());
+  const [meetingAttendees, setMeetingAttendees] = useState<SessionInfo[] | null>(
+    null,
+  );
+  const [resolvingMeeting, setResolvingMeeting] = useState(false);
+
+  const toggleRunSelected = useCallback((id: string) => {
+    setSelectedRunIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  }, []);
+
+  async function callMeetingFromSelection() {
+    if (resolvingMeeting) return;
+    const sessionIds = meetingSessionIdsForRuns(runs, selectedRunIds);
+    if (sessionIds.length < 2) return;
+    setResolvingMeeting(true);
+    try {
+      const resolved = await Promise.all(
+        sessionIds.map((sid) =>
+          invokeCmd<SessionInfo | null>("find_session_by_id", {
+            sessionId: sid,
+          }).catch(() => null),
+        ),
+      );
+      const attendees = resolved.filter((x): x is SessionInfo => x != null);
+      if (attendees.length < 2) {
+        await alertDialog(
+          `Couldn't resolve enough session files — only found ${attendees.length} out of ${sessionIds.length}. The underlying JSONLs may have been deleted.`,
+        );
+        return;
+      }
+      setMeetingAttendees(attendees);
+    } finally {
+      setResolvingMeeting(false);
+    }
+  }
 
   // Reference-stabilise the callback so `memo(RunRow)` compares equal on
   // every parent re-render. Without this, App.tsx's inline `onOpenSession`
@@ -94,6 +142,7 @@ export default function RunsDashboard({ onOpenSession }: Props = {}) {
         <table className="runs-dash__table">
           <thead>
             <tr>
+              <th className="runs-dash__select-col" aria-label="Select" />
               <th>Skill</th>
               <th>Time</th>
               <th>Status</th>
@@ -106,12 +155,57 @@ export default function RunsDashboard({ onOpenSession }: Props = {}) {
               <RunRow
                 key={r.id}
                 run={r}
+                selected={selectedRunIds.has(r.id)}
+                onToggleSelected={toggleRunSelected}
                 onOpenSession={stableOpenSession}
                 onOpenDetail={stableOpenDetail}
               />
             ))}
           </tbody>
         </table>
+      )}
+
+      {selectedRunIds.size > 0 && (
+        <div className="dashboard__synth-bar runs-dash__meeting-bar">
+          <span className="dashboard__synth-hint">
+            {selectedRunIds.size} deliverable
+            {selectedRunIds.size === 1 ? "" : "s"} selected — pick ≥2 to review
+            as a team
+          </span>
+          <div className="dashboard__synth-spacer" />
+          <button
+            className="dashboard__synth-btn dashboard__synth-btn--ghost"
+            onClick={() => setSelectedRunIds(new Set())}
+          >
+            Clear
+          </button>
+          <button
+            className="dashboard__synth-btn"
+            disabled={
+              meetingSessionIdsForRuns(runs, selectedRunIds).length < 2 ||
+              resolvingMeeting
+            }
+            onClick={() => void callMeetingFromSelection()}
+            title={
+              meetingSessionIdsForRuns(runs, selectedRunIds).length < 2
+                ? "Pick at least two runs that have a captured session"
+                : "Synthesise these deliverables into a meeting briefing"
+            }
+          >
+            {resolvingMeeting
+              ? "⏳ Resolving…"
+              : `☎ Call a meeting across ${
+                  meetingSessionIdsForRuns(runs, selectedRunIds).length
+                } runs`}
+          </button>
+        </div>
+      )}
+
+      {meetingAttendees && (
+        <MeetingModal
+          attendees={meetingAttendees}
+          onClose={() => setMeetingAttendees(null)}
+        />
       )}
       {activeRun && (
         <Suspense fallback={null}>
@@ -130,10 +224,14 @@ export default function RunsDashboard({ onOpenSession }: Props = {}) {
 // Identity-stable props come from the parent via useCallback below.
 const RunRow = memo(function RunRow({
   run,
+  selected,
+  onToggleSelected,
   onOpenSession,
   onOpenDetail,
 }: {
   run: RunRecord;
+  selected: boolean;
+  onToggleSelected: (id: string) => void;
   onOpenSession?: (sessionId: string) => void;
   onOpenDetail?: (run: RunRecord) => void;
 }) {
@@ -155,7 +253,8 @@ const RunRow = memo(function RunRow({
     <tr
       className={
         `runs-dash__row runs-dash__row--${run.status}` +
-        (clickable ? " runs-dash__row--clickable" : "")
+        (clickable ? " runs-dash__row--clickable" : "") +
+        (selected ? " runs-dash__row--selected" : "")
       }
       onClick={() => {
         if (clickable) onOpenSession?.(run.session_id!);
@@ -168,6 +267,25 @@ const RunRow = memo(function RunRow({
             : "No session captured for this run"
       }
     >
+      <td
+        className="runs-dash__cell runs-dash__select-cell"
+        onClick={(e) => e.stopPropagation()}
+      >
+        <input
+          type="checkbox"
+          aria-label="Select run for meeting"
+          checked={selected}
+          disabled={!hasSession}
+          onChange={() => onToggleSelected(run.id)}
+          title={
+            hasSession
+              ? selected
+                ? "Remove from meeting"
+                : "Add to meeting"
+              : "Legacy run — no session captured, can't join a meeting"
+          }
+        />
+      </td>
       <td className="runs-dash__cell">
         {run.skill}
         {hasSession && (
@@ -179,41 +297,21 @@ const RunRow = memo(function RunRow({
           </span>
         )}
         {hasSession && (
-          <button
-            type="button"
-            className="runs-dash__term-btn"
-            title="Continue in terminal (claude --resume)"
-            onClick={async (e) => {
-              e.stopPropagation();
-              try {
-                const result = await openSessionInTerminal(
-                  run.id,
-                  run.session_id!,
-                  run.workdir ?? null,
-                );
-                if (result.clipboard_payload) {
-                  try {
-                    await navigator.clipboard.writeText(
-                      result.clipboard_payload,
-                    );
-                    await alertDialog(
-                      `Opened ${result.resolved}. Command copied to clipboard — press Ctrl+\` in VS Code and paste:\n\n${result.clipboard_payload}`,
-                      "Opened in VS Code",
-                    );
-                  } catch {
-                    await alertDialog(
-                      `Opened ${result.resolved}. Paste this in the terminal:\n\n${result.clipboard_payload}`,
-                      "Opened in VS Code",
-                    );
-                  }
-                }
-              } catch (err) {
-                await alertDialog(`Open terminal failed: ${err}`);
-              }
-            }}
+          // The runs dashboard row is itself clickable; stopPropagation
+          // on the wrapper prevents the row's onClick from firing when
+          // the user is targeting the split button or its menu.
+          <div
+            className="runs-dash__term-slot"
+            onClick={(e) => e.stopPropagation()}
+            onMouseDown={(e) => e.stopPropagation()}
           >
-            ⌨ Terminal
-          </button>
+            <TerminalLaunchButton
+              runId={run.id}
+              sessionId={run.session_id!}
+              workdir={run.workdir}
+              onError={(msg) => void alertDialog(msg)}
+            />
+          </div>
         )}
         {run.workdir && (
           <button
