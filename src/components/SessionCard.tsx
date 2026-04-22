@@ -114,6 +114,28 @@ function SessionCardImpl({
       }}
     >
       <div className="session-card__head">
+        {onSynthToggle && (
+          // Always-visible selector checkbox: picks this session as an
+          // attendee in the next "Call a meeting" action. Clicking here
+          // does NOT open the drawer (stopPropagation) — shift+click
+          // on the card body still works as the power-user path.
+          <label
+            className="session-card__select"
+            onClick={(e) => e.stopPropagation()}
+            title={
+              synthSelected
+                ? "Remove from next meeting"
+                : "Add to next meeting"
+            }
+          >
+            <input
+              type="checkbox"
+              checked={!!synthSelected}
+              onChange={() => onSynthToggle(session)}
+              aria-label="Include in meeting"
+            />
+          </label>
+        )}
         <span className="session-card__status">
           <span className="session-card__status-icon">{meta.icon}</span>
           {meta.label}
