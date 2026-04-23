@@ -60,6 +60,7 @@ fn claude_args(
     resume_id: Option<&str>,
     add_dirs: &[String],
     scope: &ToolScope,
+    fork_on_resume: bool,
 ) -> Vec<String> {
     let mut args: Vec<String> = vec![
         "-p".into(),
@@ -81,7 +82,14 @@ fn claude_args(
     if let Some(rid) = resume_id {
         args.push("--resume".into());
         args.push(rid.to_string());
-        args.push("--fork-session".into());
+        // Fork is the default for skill re-runs (prevents parallel resumes
+        // from racing the session jsonl). For chat/annotator follow-ups
+        // we append instead — otherwise the turns land in a brand-new
+        // session id and the user's "Terminal" button opens a transcript
+        // that's missing everything they asked in the panel.
+        if fork_on_resume {
+            args.push("--fork-session".into());
+        }
     }
     // Chat nodes without add_dirs get no tool access flags at all (safest).
     // Agent nodes (or chat with add_dirs) either get a whitelist or the
@@ -112,8 +120,9 @@ pub async fn spawn_claude_stream(
     scope: &ToolScope,
     tx: UnboundedSender<String>,
     track_id: Option<&str>,
+    fork_on_resume: bool,
 ) -> Result<String, String> {
-    let args = claude_args(prompt, mode, resume_id, add_dirs, scope);
+    let args = claude_args(prompt, mode, resume_id, add_dirs, scope, fork_on_resume);
     // Gate: cap total concurrent `claude` subprocesses across the app.
     // Held until this function returns (after the child exits).
     let _permit = crate::claude_gate::acquire().await;
@@ -204,6 +213,7 @@ pub async fn run_claude(
     schedule_label: Option<String>,
     inputs_for_template: Option<Vec<String>>,
     explicit_workdir: Option<String>,
+    fork_on_resume: bool,
 ) -> Result<(), String> {
     // Workdir resolution order:
     //   1. `skill_slug` + user config → <user_folder>/<timestamped>/
@@ -292,6 +302,7 @@ pub async fn run_claude(
         &scope,
         tx,
         Some(&id),
+        fork_on_resume,
     )
     .await;
     // Await the forwarder and take ownership of its accumulated text.
@@ -456,7 +467,7 @@ mod tests {
 
     #[test]
     fn agent_args_default_to_skip_permissions() {
-        let args = claude_args("x", NodeMode::Agent, None, &[], &ToolScope::Full);
+        let args = claude_args("x", NodeMode::Agent, None, &[], &ToolScope::Full, true);
         assert!(args.iter().any(|a| a == "--dangerously-skip-permissions"));
         assert!(!args.iter().any(|a| a == "--allowed-tools"));
     }
@@ -469,6 +480,7 @@ mod tests {
             None,
             &[],
             &ToolScope::AllowList(vec!["Read".into(), "Glob".into()]),
+            true,
         );
         let s = args.join(" ");
         assert!(s.contains("--allowed-tools Read,Glob"));
@@ -477,7 +489,7 @@ mod tests {
 
     #[test]
     fn chat_args_without_add_dirs_have_no_permission_flags() {
-        let args = claude_args("x", NodeMode::Chat, None, &[], &ToolScope::Full);
+        let args = claude_args("x", NodeMode::Chat, None, &[], &ToolScope::Full, true);
         assert!(!args.iter().any(|a| a == "--dangerously-skip-permissions"));
         assert!(!args.iter().any(|a| a == "--allowed-tools"));
         assert!(args.iter().any(|a| a == "--output-format"));
@@ -492,6 +504,7 @@ mod tests {
             None,
             &["/a".to_string(), "/b".to_string()],
             &ToolScope::Full,
+            true,
         );
         let s = args.join(" ");
         assert!(s.contains("--add-dir /a"));
@@ -506,16 +519,45 @@ mod tests {
             None,
             &["/some/dir".to_string()],
             &ToolScope::Full,
+            true,
         );
         assert!(args.iter().any(|a| a == "--dangerously-skip-permissions"));
     }
 
     #[test]
-    fn resume_args_include_resume_and_fork() {
-        let args = claude_args("x", NodeMode::Chat, Some("abc-123"), &[], &ToolScope::Full);
+    fn resume_args_include_resume_and_fork_when_enabled() {
+        let args = claude_args(
+            "x",
+            NodeMode::Chat,
+            Some("abc-123"),
+            &[],
+            &ToolScope::Full,
+            true,
+        );
         let s = args.join(" ");
         assert!(s.contains("--resume abc-123"));
         assert!(s.contains("--fork-session"));
+    }
+
+    #[test]
+    fn resume_args_skip_fork_when_disabled() {
+        // Regression for the "Terminal doesn't see chat follow-ups" bug:
+        // chat panel + annotator pass fork=false so the follow-up
+        // appends to the original session jsonl, not a brand-new fork.
+        let args = claude_args(
+            "x",
+            NodeMode::Chat,
+            Some("abc-123"),
+            &[],
+            &ToolScope::Full,
+            false,
+        );
+        let s = args.join(" ");
+        assert!(s.contains("--resume abc-123"));
+        assert!(
+            !args.iter().any(|a| a == "--fork-session"),
+            "fork=false must not pass --fork-session"
+        );
     }
 
     #[test]
@@ -562,6 +604,7 @@ mod tests {
             &ToolScope::Full,
             tx,
             None,
+            true,
         )
         .await;
         let lines = collector.await.unwrap();

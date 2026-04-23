@@ -15,6 +15,7 @@ mod onboarding;
 pub mod perf_smoke;
 mod pipeline_gen;
 mod run_artifacts;
+mod run_chat;
 mod run_log;
 mod schedules;
 mod sessions;
@@ -51,6 +52,13 @@ async fn run_node(
     schedule_label: Option<String>,
     inputs_for_template: Option<Vec<String>>,
     explicit_workdir: Option<String>,
+    // Default true keeps skill-reruns safe (fork prevents parallel
+    // `--resume` from racing a single session jsonl). The run-chat
+    // panel passes false so follow-ups append to the ORIGINAL session
+    // instead of forking — otherwise the chat's turns land in a new
+    // session and the Terminal button opens a transcript that's missing
+    // everything the user asked in the panel.
+    fork_on_resume: Option<bool>,
 ) -> Result<(), String> {
     node_runner::run_claude(
         app,
@@ -65,6 +73,7 @@ async fn run_node(
         schedule_label,
         inputs_for_template,
         explicit_workdir,
+        fork_on_resume.unwrap_or(true),
     )
     .await
 }
@@ -87,6 +96,9 @@ async fn run_agent_node(
     schedule_label: Option<String>,
     inputs_for_template: Option<Vec<String>>,
     explicit_workdir: Option<String>,
+    // See run_node for the fork rationale. Default true — only the
+    // run-chat panel currently flips this to false.
+    fork_on_resume: Option<bool>,
 ) -> Result<(), String> {
     node_runner::run_claude(
         app,
@@ -101,6 +113,7 @@ async fn run_agent_node(
         schedule_label,
         inputs_for_template,
         explicit_workdir,
+        fork_on_resume.unwrap_or(true),
     )
     .await
 }
@@ -1148,6 +1161,9 @@ pub fn run() {
             hire_chat::start_hire_chat_stream,
             hire_chat::continue_hire_chat_stream,
             hire_chat::save_drafted_skill,
+            run_chat::load_run_chat,
+            run_chat::save_run_chat_exchange,
+            run_chat::clear_run_chat,
             model_config::get_model_config,
             model_config::set_model_config,
             perf_smoke::perf_smoke_test,

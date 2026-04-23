@@ -3,7 +3,8 @@ import type { RunRecord } from "../lib/runs";
 import { invokeCmd } from "../lib/tauri";
 import { alertDialog } from "../lib/dialogs";
 import { OutputAnnotator } from "./OutputAnnotator";
-import { openSessionInTerminal } from "../lib/terminal-config";
+import { RunChatPanel } from "./RunChatPanel";
+import { TerminalLaunchButton } from "./TerminalLaunchButton";
 
 type ReconstructResult = {
   markdown: string;
@@ -164,32 +165,12 @@ export default function RunDetailDrawer({
             </button>
           )}
           {run.session_id && (
-            <button
-              type="button"
-              className="run-drawer__action"
-              onClick={async () => {
-                try {
-                  const result = await openSessionInTerminal(
-                    run.id,
-                    run.session_id!,
-                    run.workdir ?? null,
-                  );
-                  if (result.clipboard_payload) {
-                    try {
-                      await navigator.clipboard.writeText(
-                        result.clipboard_payload,
-                      );
-                    } catch {
-                      /* clipboard unavailable — user can still paste manually */
-                    }
-                  }
-                } catch (e) {
-                  await alertDialog(`Open terminal failed: ${e}`);
-                }
-              }}
-            >
-              ⌨ Terminal
-            </button>
+            <TerminalLaunchButton
+              runId={run.id}
+              sessionId={run.session_id}
+              workdir={run.workdir}
+              onError={(msg) => void alertDialog(msg)}
+            />
           )}
         </div>
 
@@ -208,8 +189,19 @@ export default function RunDetailDrawer({
               runId={run.id}
               sourceTitle={run.skill}
               sessionId={run.session_id}
+              workdir={run.workdir}
             />
           )}
+          {/* Chat panel: complements the block-level annotator above
+              with a free-form thread about the whole run. Both
+              co-exist — block annotations for targeted markup,
+              chat for unscoped follow-ups and iterative refinement. */}
+          <RunChatPanel
+            runId={run.id}
+            sessionId={run.session_id}
+            workdir={run.workdir}
+            sourceTitle={run.skill}
+          />
         </div>
       </div>
     </div>

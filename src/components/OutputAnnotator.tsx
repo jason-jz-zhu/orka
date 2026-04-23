@@ -19,6 +19,21 @@ type Props = {
    * `--resume` the same conversation.
    */
   sessionId?: string;
+  /**
+   * Original run's workdir. `claude --resume` looks up the session
+   * file via a hash of cwd, so the batched follow-up spawn must run
+   * in the same dir where the original session was created — not the
+   * generic `<workspace>/nodes/<runId>` fallback. When the original
+   * run used a user-configured output folder, those two paths differ.
+   */
+  workdir?: string | null;
+  /**
+   * When true, suppress the bottom "Ask Claude with all notes" batch
+   * bar. Used when the annotator is embedded inside a chat reply —
+   * the chat panel already has its own composer, so adding another
+   * "ask" control would be redundant and confusing.
+   */
+  hideBatchBar?: boolean;
 };
 
 export function OutputAnnotator({
@@ -26,6 +41,8 @@ export function OutputAnnotator({
   runId,
   sourceTitle,
   sessionId,
+  workdir,
+  hideBatchBar = false,
 }: Props) {
   const blocks = useMemo(() => parseBlocks(markdown), [markdown]);
 
@@ -98,11 +115,25 @@ export function OutputAnnotator({
     }
     setBatchAsking(true);
     try {
+      // Resolve the session's actual cwd by walking ~/.claude/projects.
+      // Spawning claude anywhere else yields "No conversation found"
+      // because `--resume` hashes cwd → project-folder lookup. The
+      // stored `run.workdir` can drift from reality (scheduled runs,
+      // moved folders), so the session file's own location is the
+      // authoritative answer.
+      const resolved = await resolveSessionCwdOrWarn(sessionId, workdir);
+      if (resolved.missing) {
+        await alertDialog(
+          `Session ${sessionId.slice(0, 8)}… is no longer available — claude may have cleaned it up, or the project folder was moved. Re-run the skill to start a new session.`,
+        );
+        return;
+      }
       const prompt = composeBatchPrompt(pendingBlocks);
       const reply = await runOneShotClaude(
         `annot-${runId}-batch-${Date.now()}`,
         prompt,
         sessionId,
+        resolved.cwd,
       );
       if (reply) {
         // Append the same unified reply to every pending block's thread
@@ -126,6 +157,7 @@ export function OutputAnnotator({
     subId: string,
     prompt: string,
     resumeId: string,
+    cwd: string | null,
   ): Promise<string> {
     let buf = "";
     const unlistenStream = await listenEvent<string>(
@@ -153,10 +185,17 @@ export function OutputAnnotator({
         resumeId,
         addDirs: [],
         allowedTools: null,
-        // Reuse the source run's workdir so `--resume` can find the
-        // session. claude derives its project folder from cwd; spawning
-        // in a fresh node dir makes it look in the wrong place.
-        workdirKey: runId,
+        // Spawn in the session's authoritative cwd (resolved by
+        // walking ~/.claude/projects/ to find the session file).
+        // This beats the stored run.workdir, which can drift from
+        // reality — scheduled runs' timestamped folders can be
+        // deleted or moved while the session transcript survives.
+        explicitWorkdir: cwd,
+        // Append to the original session so the "Terminal" button
+        // on this run shows the batched follow-up. Without this flag
+        // claude forks a new session and the original transcript
+        // stops at step 4 forever.
+        forkOnResume: false,
       });
       await done;
     } finally {
@@ -226,7 +265,7 @@ export function OutputAnnotator({
           onDelete={handleDelete}
         />
       ))}
-      {pendingCount > 0 && (
+      {pendingCount > 0 && !hideBatchBar && (
         <div className="output-annotator__batch-bar">
           <span className="output-annotator__batch-count">
             📝 {pendingCount} note{pendingCount === 1 ? "" : "s"} across{" "}
@@ -248,6 +287,31 @@ export function OutputAnnotator({
       )}
     </div>
   );
+}
+
+/** Walk ~/.claude/projects/ to find the session file's actual cwd. That
+ *  cwd is what `claude --resume` will hash to locate the session, so
+ *  spawning there guarantees resume succeeds. Returns `{ cwd, missing }`
+ *  so the caller can distinguish "session is genuinely gone" from "IPC
+ *  failed, trying fallback". */
+async function resolveSessionCwdOrWarn(
+  sessionId: string,
+  fallback: string | null | undefined,
+): Promise<{ cwd: string | null; missing: boolean }> {
+  try {
+    const info = await invokeCmd<{ project_cwd?: string } | null>(
+      "find_session_by_id",
+      { sessionId },
+    );
+    if (info?.project_cwd) return { cwd: info.project_cwd, missing: false };
+    // Lookup succeeded but returned null → session file isn't under any
+    // project → really gone. Fallback won't help here either.
+    return { cwd: null, missing: true };
+  } catch {
+    // IPC itself failed (rare). Use the caller's stored workdir so we
+    // can at least attempt the spawn. Session may or may not still exist.
+    return { cwd: fallback ?? null, missing: false };
+  }
 }
 
 /** Compose a single prompt that lists every pending note grouped by the
