@@ -102,6 +102,10 @@ export function SkillRunner({ skill, onOpenInCanvas, initialPrompt }: Props) {
     () => recentRunsForSkill(runs, skill.slug, 5),
     [runs, skill.slug],
   );
+  // Inline toast for trail-row errors — e.g. the 📄 button trying to
+  // reveal a run whose managed workdir has already been cleaned up.
+  // Keeps those gentle notices out of the alert-modal firehose.
+  const [trailToast, setTrailToast] = useState<string | null>(null);
   const [outputFolder, setOutputFolder] = useState<string | null>(null);
   const [inputValues, setInputValues] = useState<Record<string, string>>(
     () => seedInputValues(skill),
@@ -892,13 +896,33 @@ export function SkillRunner({ skill, onOpenInCanvas, initialPrompt }: Props) {
                       type="button"
                       className="skill-runner__trail-open"
                       title={`Reveal ${r.workdir} in Finder`}
-                      onClick={(e) => {
+                      onClick={async (e) => {
                         e.stopPropagation();
-                        void invokeCmd("reveal_in_finder", {
-                          path: r.workdir,
-                        }).catch((err) =>
-                          void alertDialog(`Reveal failed: ${err}`),
-                        );
+                        try {
+                          await invokeCmd("reveal_in_finder", {
+                            path: r.workdir,
+                          });
+                        } catch (err) {
+                          // Managed per-run workdirs under
+                          // ~/OrkaCanvas/<ws>/nodes/ are intermediate —
+                          // claude cleans them up after the session
+                          // settles. A modal alert for "folder gone"
+                          // is noisy; a toast-style inline note is
+                          // gentler. Fall back to console for the
+                          // rare "actual reveal failed" case so we
+                          // can still debug.
+                          const msg = String(err);
+                          if (msg.includes("folder was removed")) {
+                            setTrailToast(
+                              `This run's output folder was cleaned up. Nothing to reveal.`,
+                            );
+                            window.setTimeout(() => setTrailToast(null), 2200);
+                          } else {
+                            console.warn(`[trail] reveal ${r.workdir}:`, err);
+                            setTrailToast(`Reveal failed — ${msg}`);
+                            window.setTimeout(() => setTrailToast(null), 3500);
+                          }
+                        }
                       }}
                     >
                       📄
@@ -908,6 +932,9 @@ export function SkillRunner({ skill, onOpenInCanvas, initialPrompt }: Props) {
               );
             })}
           </ul>
+          {trailToast && (
+            <div className="skill-runner__trail-toast">{trailToast}</div>
+          )}
         </div>
       )}
       {showSchedule && (
