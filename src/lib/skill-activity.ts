@@ -37,6 +37,27 @@ export function runCountBySkill(runs: RunRecord[]): Map<string, number> {
 }
 
 /**
+ * Most recent N runs for a given skill slug, newest-first, with a
+ * parseable `started_at` timestamp. Used by SkillRunner to render an
+ * agent-trail section so the user can see the last few deliveries
+ * without switching to the Logbook.
+ *
+ * Unparseable timestamps are silently skipped rather than surfacing a
+ * NaN sort — legacy rows exist on some users' disks.
+ */
+export function recentRunsForSkill(
+  runs: RunRecord[],
+  slug: string,
+  limit = 5,
+): RunRecord[] {
+  return runs
+    .filter((r) => r.skill === slug && Number.isFinite(Date.parse(r.started_at)))
+    .slice()
+    .sort((a, b) => Date.parse(b.started_at) - Date.parse(a.started_at))
+    .slice(0, Math.max(0, limit));
+}
+
+/**
  * Human-friendly "N{s,m,h,d} ago" for the skill-card badge. Mirrors
  * the fmtAgo pattern used elsewhere but defined once so tests can
  * pin the exact thresholds.

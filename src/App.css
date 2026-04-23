@@ -6438,3 +6438,77 @@ h5.block-card__heading, h6.block-card__heading { font-size: 11px; color: #8a92a0
   color: #fca5a5;
   font-size: 12px;
 }
+
+/* Agent Trail — recent runs of the selected skill, rendered inside
+   SkillRunner. One-line per run: status · time · duration · trigger
+   · open workdir. Operator narrative: the employee's timesheet,
+   collocated with their profile. */
+.skill-runner__trail {
+  margin: 16px 0;
+  padding: 10px 14px;
+  border: 1px solid rgba(255, 255, 255, 0.06);
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.02);
+}
+.skill-runner__trail-head {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  margin-bottom: 6px;
+}
+.skill-runner__trail-label {
+  font-size: 10px;
+  letter-spacing: 0.08em;
+  color: #94a3b8;
+  font-weight: 600;
+}
+.skill-runner__trail-hint {
+  font-size: 11px;
+  color: #64748b;
+  opacity: 0.7;
+}
+.skill-runner__trail-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.skill-runner__trail-row {
+  display: grid;
+  grid-template-columns: 16px 80px 60px 1fr auto;
+  gap: 10px;
+  align-items: center;
+  padding: 4px 6px;
+  border-radius: 4px;
+  font-size: 12px;
+  color: #cbd5e1;
+  font-variant-numeric: tabular-nums;
+}
+.skill-runner__trail-row:hover {
+  background: rgba(255, 255, 255, 0.03);
+}
+.skill-runner__trail-row--ok .skill-runner__trail-status {
+  color: #4ade80;
+}
+.skill-runner__trail-row--errored .skill-runner__trail-status {
+  color: #ef4444;
+}
+.skill-runner__trail-time { opacity: 0.85; }
+.skill-runner__trail-dur  { opacity: 0.6; font-size: 11px; }
+.skill-runner__trail-trigger {
+  opacity: 0.5;
+  font-size: 11px;
+  text-transform: lowercase;
+  letter-spacing: 0.02em;
+}
+.skill-runner__trail-open {
+  background: transparent;
+  border: none;
+  color: #94a3b8;
+  cursor: pointer;
+  padding: 0 4px;
+  font-size: 13px;
+}
+.skill-runner__trail-open:hover { color: #e6e6e6; }

@@ -1,4 +1,4 @@
-import { lazy, Suspense, useEffect, useRef, useState } from "react";
+import { lazy, Suspense, useEffect, useMemo, useRef, useState } from "react";
 import { open as openDialog } from "@tauri-apps/plugin-dialog";
 import { invokeCmd, listenEvent } from "../lib/tauri";
 import { parseLineInto, type StreamEvent } from "../lib/stream-parser";
@@ -21,6 +21,11 @@ import {
 import { confirmDialog } from "../lib/dialogs";
 import { useSkills } from "../lib/skills";
 import type { SkillMeta } from "../lib/skills";
+import { useRuns } from "../lib/runs";
+import {
+  recentRunsForSkill,
+  fmtLastDelivered,
+} from "../lib/skill-activity";
 
 /** Prefix for schedules targeting an atomic skill (as opposed to a
  *  canvas pipeline). Lets runScheduledPipeline route to the right
@@ -85,6 +90,18 @@ export function SkillRunner({ skill, onOpenInCanvas, initialPrompt }: Props) {
   );
   const [suggesting, setSuggesting] = useState(false);
   const [schedules, setSchedules] = useState<Schedule[]>([]);
+  // Pull the shared run history so we can render this skill's "Trail"
+  // (latest N runs) inline — saves the user a tab switch to Logbook.
+  // useRuns refresh is idempotent; SkillsTab already primes it.
+  const runs = useRuns((s) => s.runs);
+  const refreshRuns = useRuns((s) => s.refresh);
+  useEffect(() => {
+    void refreshRuns();
+  }, [refreshRuns]);
+  const trail = useMemo(
+    () => recentRunsForSkill(runs, skill.slug, 5),
+    [runs, skill.slug],
+  );
   const [outputFolder, setOutputFolder] = useState<string | null>(null);
   const [inputValues, setInputValues] = useState<Record<string, string>>(
     () => seedInputValues(skill),
@@ -836,6 +853,61 @@ export function SkillRunner({ skill, onOpenInCanvas, initialPrompt }: Props) {
           >
             ↪ Continue
           </button>
+        </div>
+      )}
+      {trail.length > 0 && (
+        // Agent trail — most recent runs of THIS skill. Operator-layer
+        // narrative: the sidebar's "N× run" badge tells you how often
+        // the agent has delivered; this section tells you when and
+        // how each of those deliveries went.
+        <div className="skill-runner__trail">
+          <div className="skill-runner__trail-head">
+            <span className="skill-runner__trail-label">TRAIL</span>
+            <span className="skill-runner__trail-hint">
+              last {trail.length} run{trail.length === 1 ? "" : "s"}
+            </span>
+          </div>
+          <ul className="skill-runner__trail-list">
+            {trail.map((r) => {
+              const ts = Date.parse(r.started_at);
+              const durMs = r.duration_ms;
+              return (
+                <li
+                  key={r.id}
+                  className={`skill-runner__trail-row skill-runner__trail-row--${r.status}`}
+                  title={new Date(ts).toLocaleString()}
+                >
+                  <span className="skill-runner__trail-status">
+                    {r.status === "ok" ? "✓" : "✗"}
+                  </span>
+                  <span className="skill-runner__trail-time">
+                    {fmtLastDelivered(ts)}
+                  </span>
+                  <span className="skill-runner__trail-dur">
+                    {durMs ? `${(durMs / 1000).toFixed(1)}s` : "—"}
+                  </span>
+                  <span className="skill-runner__trail-trigger">{r.trigger}</span>
+                  {r.workdir && (
+                    <button
+                      type="button"
+                      className="skill-runner__trail-open"
+                      title={`Reveal ${r.workdir} in Finder`}
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        void invokeCmd("reveal_in_finder", {
+                          path: r.workdir,
+                        }).catch((err) =>
+                          void alertDialog(`Reveal failed: ${err}`),
+                        );
+                      }}
+                    >
+                      📄
+                    </button>
+                  )}
+                </li>
+              );
+            })}
+          </ul>
         </div>
       )}
       {showSchedule && (

@@ -1,5 +1,10 @@
 import { describe, expect, it } from "vitest";
-import { lastDeliveredBySkill, fmtLastDelivered, runCountBySkill } from "./skill-activity";
+import {
+  lastDeliveredBySkill,
+  fmtLastDelivered,
+  runCountBySkill,
+  recentRunsForSkill,
+} from "./skill-activity";
 import type { RunRecord } from "./runs";
 
 function run(skill: string, started_at: string): RunRecord {
@@ -45,6 +50,42 @@ describe("lastDeliveredBySkill", () => {
   it("skills with no runs are absent from the map", () => {
     const m = lastDeliveredBySkill([run("a", "2026-04-22T10:00:00Z")]);
     expect(m.has("b")).toBe(false);
+  });
+});
+
+describe("recentRunsForSkill", () => {
+  it("filters by slug and returns newest-first", () => {
+    const runs = [
+      run("a", "2026-04-18T10:00:00Z"),
+      run("b", "2026-04-22T10:00:00Z"),
+      run("a", "2026-04-22T10:00:00Z"),
+      run("a", "2026-04-21T10:00:00Z"),
+    ];
+    const out = recentRunsForSkill(runs, "a");
+    expect(out.map((r) => r.started_at)).toEqual([
+      "2026-04-22T10:00:00Z",
+      "2026-04-21T10:00:00Z",
+      "2026-04-18T10:00:00Z",
+    ]);
+  });
+
+  it("honours the limit argument", () => {
+    const runs = Array.from({ length: 10 }, (_, i) =>
+      run("a", `2026-04-${String(10 + i).padStart(2, "0")}T00:00:00Z`),
+    );
+    expect(recentRunsForSkill(runs, "a", 3)).toHaveLength(3);
+  });
+
+  it("skips runs with unparseable started_at", () => {
+    const runs = [
+      run("a", "not-a-date"),
+      run("a", "2026-04-22T10:00:00Z"),
+    ];
+    expect(recentRunsForSkill(runs, "a")).toHaveLength(1);
+  });
+
+  it("returns an empty array when the slug has no runs", () => {
+    expect(recentRunsForSkill([run("a", "2026-04-22T10:00:00Z")], "b")).toEqual([]);
   });
 });
 
