@@ -6252,3 +6252,12 @@ h5.block-card__heading, h6.block-card__heading { font-size: 11px; color: #8a92a0
 .skills-tab__hire-btn:hover {
   background: rgba(168, 85, 247, 0.12) !important;
 }
+
+/* Run-count companion badge next to "last delivered" on the skill row. */
+.skills-tab__run-count {
+  font-size: 10px;
+  color: #94a3b8;
+  margin-left: 2px;
+  font-variant-numeric: tabular-nums;
+  opacity: 0.7;
+}

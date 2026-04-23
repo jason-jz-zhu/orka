@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { lastDeliveredBySkill, fmtLastDelivered } from "./skill-activity";
+import { lastDeliveredBySkill, fmtLastDelivered, runCountBySkill } from "./skill-activity";
 import type { RunRecord } from "./runs";
 
 function run(skill: string, started_at: string): RunRecord {
@@ -45,6 +45,23 @@ describe("lastDeliveredBySkill", () => {
   it("skills with no runs are absent from the map", () => {
     const m = lastDeliveredBySkill([run("a", "2026-04-22T10:00:00Z")]);
     expect(m.has("b")).toBe(false);
+  });
+});
+
+describe("runCountBySkill", () => {
+  it("counts runs per skill slug across the full list", () => {
+    const runs = [
+      run("a", "2026-04-20T10:00:00Z"),
+      run("a", "2026-04-21T10:00:00Z"),
+      run("b", "2026-04-22T10:00:00Z"),
+    ];
+    const m = runCountBySkill(runs);
+    expect(m.get("a")).toBe(2);
+    expect(m.get("b")).toBe(1);
+  });
+
+  it("returns an empty map when there are no runs", () => {
+    expect(runCountBySkill([]).size).toBe(0);
   });
 });
 

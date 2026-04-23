@@ -23,6 +23,20 @@ export function lastDeliveredBySkill(runs: RunRecord[]): Map<string, number> {
 }
 
 /**
+ * Total runs per skill slug, regardless of status or age. Used
+ * alongside `lastDeliveredBySkill` to answer "how busy has this
+ * employee been?" on the sidebar. Returning a Map (not a count-only
+ * function) lets callers read many slugs cheaply from one pass.
+ */
+export function runCountBySkill(runs: RunRecord[]): Map<string, number> {
+  const out = new Map<string, number>();
+  for (const r of runs) {
+    out.set(r.skill, (out.get(r.skill) ?? 0) + 1);
+  }
+  return out;
+}
+
+/**
  * Human-friendly "N{s,m,h,d} ago" for the skill-card badge. Mirrors
  * the fmtAgo pattern used elsewhere but defined once so tests can
  * pin the exact thresholds.

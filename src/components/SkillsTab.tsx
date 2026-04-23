@@ -5,7 +5,11 @@ import { SkillRunner } from "./SkillRunner";
 import { invokeCmd, listenEvent } from "../lib/tauri";
 import { alertDialog, confirmDialog, promptDialog } from "../lib/dialogs";
 import { open as openDialog } from "@tauri-apps/plugin-dialog";
-import { lastDeliveredBySkill, fmtLastDelivered } from "../lib/skill-activity";
+import {
+  lastDeliveredBySkill,
+  fmtLastDelivered,
+  runCountBySkill,
+} from "../lib/skill-activity";
 // Lazy: the marketplace modal pulls AddTapModal behind it. Only mounted
 // when the user explicitly opens "Browse skill packs" from the add menu.
 const SkillPacksModal = lazy(() => import("./SkillPacksModal"));
@@ -97,6 +101,7 @@ export function SkillsTab({ onOpenInCanvas }: SkillsTabProps = {}) {
     void refreshRuns();
   }, [refreshRuns]);
   const lastDelivered = useMemo(() => lastDeliveredBySkill(runs), [runs]);
+  const runCounts = useMemo(() => runCountBySkill(runs), [runs]);
   const [filter, setFilter] = useState("");
   const [selectedSlug, setSelectedSlug] = useState<string | null>(null);
   // "Hire by describe" seed — the one-sentence goal the user typed
@@ -502,9 +507,10 @@ export function SkillsTab({ onOpenInCanvas }: SkillsTabProps = {}) {
                     {s.has_graph && (
                       <span className="skills-tab__composite-tag">pipeline</span>
                     )}
-                    {/* "Last delivered" badge: puts an employee-review
-                        vibe on the sidebar. Skills that never ran get
-                        no badge (don't clutter the row). */}
+                    {/* Activity badges: "last delivered" + "N runs".
+                        Puts an employee-review vibe on the sidebar.
+                        Skills that never ran get no badges (don't
+                        clutter the row). */}
                     {lastDelivered.has(s.slug) && (
                       <span
                         className="skills-tab__last-run"
@@ -513,6 +519,14 @@ export function SkillsTab({ onOpenInCanvas }: SkillsTabProps = {}) {
                         ).toLocaleString()}
                       >
                         · {fmtLastDelivered(lastDelivered.get(s.slug)!)}
+                      </span>
+                    )}
+                    {runCounts.has(s.slug) && (
+                      <span
+                        className="skills-tab__run-count"
+                        title={`${runCounts.get(s.slug)} total run(s)`}
+                      >
+                        · {runCounts.get(s.slug)}× run
                       </span>
                     )}
                   </div>
