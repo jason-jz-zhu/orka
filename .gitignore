@@ -61,6 +61,7 @@ demo-output/short-cuts/
 demo-output/*.webm
 demo-output/*.aac
 demo-output/*-silent.mp4
+demo-output/silent.mp4
 demo-output/v[0-9]*
 demo-output/cl*
 demo-output/clean-*
@@ -72,3 +73,10 @@ demo-output/voice-clean/
 demo-output/frames/
 demo-output/timing/
 demo-output/voiceover-*
+# Per-run generated scaffolding (the HTML being recorded, scene config,
+# raw frame dump, orchestrator script, intermediate full video).
+demo-output/demo-page.html
+demo-output/scenes.json
+demo-output/record.cjs
+demo-output/raw/
+demo-output/orka-demo.mp4
