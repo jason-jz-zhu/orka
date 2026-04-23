@@ -131,22 +131,27 @@ of truth.
 
 1. Show each generated SKILL.md to the user for review.
 2. Create directories and write files.
-3. Tell the user:
+3. Tell the user — **keep it short**. The UI already handles the flow,
+   so don't over-explain. A 3-line confirmation + one next-step is
+   plenty:
 
 ```
-Done! Created:
-  📁 ~/.orka/skills/daily-competitor-brief/
-     ├── SKILL.md (pipeline: 4 nodes)
-     ├── github-new-issues/SKILL.md (new atomic skill)
-     └── producthunt-daily/SKILL.md (new atomic skill)
+✓ Hired: daily-competitor-brief
+  └─ 4 nodes · reuses "summarize" · output → ~/Documents/competitors/
 
-  Reused: summarize (from your existing library)
-
-Open Orka → daily-competitor-brief is in the Skill Palette.
-Drag to canvas → set Schedule → you're live.
-
-Or run now: claude "/daily-competitor-brief"
+Run now with ▶ Run skill, or set ⏰ Schedule in the runner.
 ```
+
+**DO NOT** say things like "open Orka", "find it in the Skill Palette",
+or "drag to canvas". In current Orka (v2+), the user is already in the
+app, skills live in the left sidebar (not a palette), and there's no
+drag-to-canvas step — the runner + schedule button are both one click
+away in the main pane. Keep the "how to use it" line to one imperative
+sentence that names the actual buttons.
+
+Sub-skills you created alongside the main one don't need their own
+call-outs in the confirmation — just mention them in the tree. If the
+user wants to promote a sub-skill to top-level, they'll ask.
 
 ---
 

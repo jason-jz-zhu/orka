@@ -2,7 +2,7 @@ import { lazy, Suspense, useDeferredValue, useEffect, useMemo, useRef, useState 
 import { useSkills, initSkillsWatcher, type SkillMeta } from "../lib/skills";
 import { useRuns } from "../lib/runs";
 import { SkillRunner } from "./SkillRunner";
-import { invokeCmd, listenEvent } from "../lib/tauri";
+import { invokeCmd } from "../lib/tauri";
 import { alertDialog, confirmDialog, promptDialog } from "../lib/dialogs";
 import { open as openDialog } from "@tauri-apps/plugin-dialog";
 import {
@@ -18,27 +18,6 @@ const SkillPacksModal = lazy(() => import("./SkillPacksModal"));
 const HireChatModal = lazy(() =>
   import("./HireChatModal").then((m) => ({ default: m.HireChatModal })),
 );
-
-type PrewarmProgress = {
-  current: number;
-  total: number;
-  slug: string;
-  status: "start" | "ok" | "err" | "skipped";
-  error: string | null;
-};
-
-type PrewarmSummary = {
-  total: number;
-  succeeded: number;
-  failed: number;
-  skipped: number;
-  results: Array<{
-    slug: string;
-    status: string;
-    error: string | null;
-    examples: string[] | null;
-  }>;
-};
 
 /** Known tap-id prefixes — these come from the trusted_taps backend and
  *  indicate the skill was installed via a tap (gstack, etc). Slugs of
@@ -154,14 +133,8 @@ export function SkillsTab({ onOpenInCanvas }: SkillsTabProps = {}) {
   const selected: SkillMeta | null =
     skills.find((s) => s.slug === selectedSlug) ?? null;
 
-  // How many of the loaded skills ship without example prompts. Drives
-  // the batch prewarm banner in the sidebar header.
-  const missingExamplesCount = useMemo(
-    () => skills.filter((s) => !s.examples || s.examples.length === 0).length,
-    [skills],
-  );
-  const [prewarming, setPrewarming] = useState(false);
-  const [prewarmStatus, setPrewarmStatus] = useState<string | null>(null);
+  // The old batch-prewarm state was retired with its sidebar banner —
+  // per-skill "✨ Suggest examples" on the runner handles it lazily now.
   // "+" dropdown — unified entry point for every way a new skill
   // can arrive in the app (create, import, install from tap).
   const [addMenuOpen, setAddMenuOpen] = useState(false);
@@ -298,66 +271,6 @@ export function SkillsTab({ onOpenInCanvas }: SkillsTabProps = {}) {
     }
   }
 
-  async function prewarmAll() {
-    if (prewarming) return;
-    if (missingExamplesCount === 0) return;
-    const estSeconds = Math.ceil(missingExamplesCount * 5); // rough: ~5s/skill w/ Sonnet
-    const ok = await confirmDialog(
-      `Generate example prompts for ${missingExamplesCount} skill${
-        missingExamplesCount === 1 ? "" : "s"
-      } that don't have any?\n\n` +
-        `This calls Claude (Sonnet) once per skill and writes the result back to each SKILL.md. ` +
-        `Approximate time: ${estSeconds}s. Cost: ~$${(missingExamplesCount * 0.01).toFixed(2)}.`,
-      {
-        title: "Prewarm examples",
-        okLabel: "Generate",
-        cancelLabel: "Cancel",
-      },
-    );
-    if (!ok) return;
-
-    setPrewarming(true);
-    setPrewarmStatus(`Starting… (0 of ${missingExamplesCount})`);
-    const unlisten = await listenEvent<PrewarmProgress>(
-      "skill-examples:prewarm:progress",
-      (p) => {
-        if (p.status === "start") {
-          setPrewarmStatus(`Generating for ${p.slug} (${p.current} of ${p.total})`);
-        } else if (p.status === "err") {
-          setPrewarmStatus(
-            `✗ ${p.slug} failed — continuing (${p.current} of ${p.total})`,
-          );
-        }
-      },
-    );
-    try {
-      const summary = await invokeCmd<PrewarmSummary>(
-        "suggest_examples_for_all_skills",
-      );
-      await refresh();
-      setPrewarmStatus(null);
-      await alertDialog(
-        `Done.\n\n` +
-          `  ✓ ${summary.succeeded} skills got new examples\n` +
-          `  ✗ ${summary.failed} failed${
-            summary.failed > 0
-              ? `\n\nFailed: ${summary.results
-                  .filter((r) => r.status === "err")
-                  .map((r) => `${r.slug} (${r.error ?? "unknown"})`)
-                  .join(", ")}`
-              : ""
-          }`,
-        "Prewarm complete",
-      );
-    } catch (e) {
-      setPrewarmStatus(null);
-      await alertDialog(`Prewarm failed: ${e}`);
-    } finally {
-      unlisten();
-      setPrewarming(false);
-    }
-  }
-
   return (
     <div className="skills-tab">
       <aside className="skills-tab__sidebar">
@@ -449,23 +362,11 @@ export function SkillsTab({ onOpenInCanvas }: SkillsTabProps = {}) {
             onChange={(e) => setFilter(e.target.value)}
           />
         </div>
-        {!loading && missingExamplesCount > 0 && !prewarming && (
-          <button
-            type="button"
-            className="skills-tab__prewarm"
-            onClick={() => void prewarmAll()}
-            title={`Generate example prompts for ${missingExamplesCount} skills that don't have any yet`}
-          >
-            ✨ Prewarm examples for {missingExamplesCount} skill
-            {missingExamplesCount === 1 ? "" : "s"}
-          </button>
-        )}
-        {prewarming && prewarmStatus && (
-          <div className="skills-tab__prewarm-status" role="status">
-            <span className="skills-tab__prewarm-dot" aria-hidden>•</span>
-            {prewarmStatus}
-          </div>
-        )}
+        {/* The old "✨ Prewarm examples for N skills" batch banner was
+            retired. Per-skill "✨ Suggest examples" on the runner covers
+            the same need lazily — users who never need example prompts
+            shouldn't see the offer, and users who do get it inline at
+            the moment they care. See SkillRunner's suggest-btn. */}
         {loading && <div className="sidebar__status">loading…</div>}
         {!loading && filtered.length === 0 && (
           <div className="sidebar__status">
