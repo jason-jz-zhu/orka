@@ -103,7 +103,18 @@ export default function WorkspaceSwitcher() {
     }
   }
 
+  // Single-workspace users get no value from the switcher chrome — the
+  // menu's only useful action then is "+ New project", which belongs in
+  // Settings anyway. Render nothing on the solo case; re-appears the
+  // instant a second workspace exists. Includes its own trailing
+  // toolbar divider so the App-level layout doesn't leave an orphaned
+  // separator when this component returns null.
+  if (workspaces.length < 2) {
+    return null;
+  }
+
   return (
+    <>
     <div className="ws" ref={ref}>
       <button className="ws__button" onClick={() => setOpen((v) => !v)}>
         <span className="ws__name">{active}</span> ▾
@@ -142,5 +153,7 @@ export default function WorkspaceSwitcher() {
         </div>
       )}
     </div>
+    <div className="toolbar__divider" />
+    </>
   );
 }

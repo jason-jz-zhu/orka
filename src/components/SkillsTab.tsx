@@ -99,10 +99,25 @@ export function SkillsTab({ onOpenInCanvas }: SkillsTabProps = {}) {
   const lastDelivered = useMemo(() => lastDeliveredBySkill(runs), [runs]);
   const [filter, setFilter] = useState("");
   const [selectedSlug, setSelectedSlug] = useState<string | null>(null);
+  // "Hire by describe" seed — the one-sentence goal the user typed
+  // when choosing "+ Hire → Create new skill". Consumed by SkillRunner
+  // (passed as initialPrompt) on first mount of the orka-skill-builder
+  // runner. Cleared after one consumption so later opens of the same
+  // skill don't re-prefill.
+  const [hireSeed, setHireSeed] = useState<string | null>(null);
 
   useEffect(() => {
     initSkillsWatcher();
   }, []);
+
+  // Clear the hire seed as soon as the user navigates away from the
+  // builder — revisiting orka-skill-builder later shouldn't re-prefill
+  // with the old goal.
+  useEffect(() => {
+    if (hireSeed && selectedSlug && selectedSlug !== "orka-skill-builder") {
+      setHireSeed(null);
+    }
+  }, [selectedSlug, hireSeed]);
 
   const deferredFilter = useDeferredValue(filter);
   const filtered = useMemo(() => {
@@ -169,6 +184,25 @@ export function SkillsTab({ onOpenInCanvas }: SkillsTabProps = {}) {
   function openSkillPacks() {
     setAddMenuOpen(false);
     setShowSkillPacks(true);
+  }
+
+  /** Single-sentence hiring flow. Collects a goal from the user, lands
+   *  them on the orka-skill-builder runner with the goal pre-filled so
+   *  they can just hit Run. Cancelling the prompt is a no-op (menu was
+   *  already closed; sidebar stays where it was). */
+  async function hireByDescribe() {
+    const goal = await promptDialog(
+      "One sentence: what should this agent do?",
+      {
+        title: "Hire a new agent",
+        default:
+          "Every morning, summarize yesterday's PRs I reviewed and email me the top 3.",
+      },
+    );
+    const trimmed = goal?.trim();
+    if (!trimmed) return;
+    setHireSeed(trimmed);
+    setSelectedSlug("orka-skill-builder");
   }
 
   /** Import a skill folder from anywhere on disk. Opens a native folder
@@ -338,14 +372,17 @@ export function SkillsTab({ onOpenInCanvas }: SkillsTabProps = {}) {
                     className="skills-tab__add-menu-item"
                     onClick={() => {
                       setAddMenuOpen(false);
-                      setSelectedSlug("orka-skill-builder");
+                      // Hire-by-describe: ask one sentence, hand it to
+                      // the builder ready-to-Run. This is the main "+ Hire"
+                      // flow now — most users never need the other two.
+                      void hireByDescribe();
                     }}
                   >
                     <span className="skills-tab__add-menu-icon">✨</span>
                     <span className="skills-tab__add-menu-label">
-                      Create new skill
+                      Hire by describing
                       <span className="skills-tab__add-menu-hint">
-                        via orka-skill-builder
+                        one sentence → orka-skill-builder drafts the SKILL.md
                       </span>
                     </span>
                   </button>
@@ -525,9 +562,22 @@ export function SkillsTab({ onOpenInCanvas }: SkillsTabProps = {}) {
       <section className="skills-tab__runner">
         {selected ? (
           <SkillRunner
-            key={selected.slug}
+            // Changing the key unmounts + remounts the runner; that's
+            // how the hireSeed actually seeds freeText (SkillRunner
+            // reads initialPrompt only on the first render). We mix
+            // the seed into the key so the same orka-skill-builder
+            // runner gets a fresh mount each time a new goal arrives.
+            key={
+              selected.slug +
+              (selected.slug === "orka-skill-builder" && hireSeed
+                ? `::hire::${hireSeed.length}`
+                : "")
+            }
             skill={selected}
             onOpenInCanvas={onOpenInCanvas}
+            initialPrompt={
+              selected.slug === "orka-skill-builder" ? hireSeed ?? undefined : undefined
+            }
           />
         ) : (
           <div className="skills-tab__empty">

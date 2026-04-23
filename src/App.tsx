@@ -660,8 +660,10 @@ export default function App() {
         onJumpToRuns={() => setTab("runs")}
       />
       <div className="toolbar">
+        {/* WorkspaceSwitcher renders its own trailing divider so that
+            hiding it on single-workspace setups doesn't leave an
+            orphaned separator at the start of the toolbar. */}
         <WorkspaceSwitcher />
-        <div className="toolbar__divider" />
         <div className="tabs" role="tablist">
           <button
             role="tab"

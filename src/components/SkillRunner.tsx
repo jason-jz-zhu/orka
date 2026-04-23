@@ -32,6 +32,11 @@ type Props = {
   /** Supplied by SkillsTab → App. Opens the composite skill's DAG in
    *  the canvas editor (reveals Studio tab + loads graph.json). */
   onOpenInCanvas?: (slug: string, path: string) => Promise<void> | void;
+  /** Seed the free-text prompt. Used by the "Hire by describe" flow:
+   *  SkillsTab asks the user a one-sentence goal, auto-selects the
+   *  orka-skill-builder skill, then drops the sentence into this prop
+   *  so the runner lands ready-to-Run without the user re-typing. */
+  initialPrompt?: string;
 };
 
 type RunState = {
@@ -62,7 +67,7 @@ const INITIAL: RunState = {
  * store involvement. The annotator owns persistence for any notes the
  * user adds, keyed by a stable runId derived from skill slug.
  */
-export function SkillRunner({ skill, onOpenInCanvas }: Props) {
+export function SkillRunner({ skill, onOpenInCanvas, initialPrompt }: Props) {
   // A stable id for this runner instance. Annotations persist under this
   // key so revisiting the skill reloads notes on the same output if
   // nothing's been re-run. We reset on explicit run.
@@ -88,7 +93,9 @@ export function SkillRunner({ skill, onOpenInCanvas }: Props) {
   // prepended to the composed /slug prompt so users can add context
   // without needing frontmatter-declared inputs. The existing structured
   // inputs (if any) still work — this is additive.
-  const [freeText, setFreeText] = useState("");
+  // Seed from `initialPrompt` on first mount only — once the user has
+  // edited or fired a run, we never stomp their text.
+  const [freeText, setFreeText] = useState(initialPrompt ?? "");
   // Advanced inputs disclosure — collapsed by default. Structured inputs
   // are now optional overrides, not the primary input surface.
   const [advancedOpen, setAdvancedOpen] = useState(false);
