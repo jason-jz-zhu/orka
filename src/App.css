@@ -6147,3 +6147,88 @@ h5.block-card__heading, h6.block-card__heading { font-size: 11px; color: #8a92a0
   font-family: inherit;
   opacity: 0.35;
 }
+
+/* ============================================================
+   Skill-packs modal — "Browse skill packs" entry point.
+   Replaces the old sidebar "Trusted Sources" section.
+   ============================================================ */
+.skill-packs-modal {
+  max-width: 640px;
+  width: 90vw;
+}
+.skill-packs-modal__list {
+  padding: 8px 20px;
+  max-height: 420px;
+  overflow-y: auto;
+}
+.skill-packs-modal__status {
+  padding: 20px;
+  text-align: center;
+  color: #94a3b8;
+  font-size: 12px;
+}
+.skill-packs-modal__footer {
+  display: flex;
+  justify-content: flex-end;
+  padding: 12px 20px 16px;
+  border-top: 1px solid #22262e;
+}
+.skill-packs-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 12px;
+  border-radius: 6px;
+  margin-bottom: 4px;
+  background: rgba(255, 255, 255, 0.02);
+  border: 1px solid rgba(255, 255, 255, 0.04);
+}
+.skill-packs-row__info {
+  flex: 1;
+  min-width: 0;
+}
+.skill-packs-row__name {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 13px;
+  color: #e6e6e6;
+}
+.skill-packs-row__custom-tag {
+  font-size: 10px;
+  padding: 1px 6px;
+  border-radius: 99px;
+  background: rgba(168, 85, 247, 0.18);
+  color: #c4b5fd;
+  letter-spacing: 0.04em;
+}
+.skill-packs-row__count {
+  color: #94a3b8;
+  font-size: 11px;
+}
+.skill-packs-row__desc {
+  margin-top: 2px;
+  font-size: 11px;
+  color: #94a3b8;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.skill-packs-row__actions {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-shrink: 0;
+}
+.skill-packs-row__busy {
+  font-size: 14px;
+}
+.skill-packs-row__remove {
+  background: transparent;
+  border: none;
+  color: #64748b;
+  cursor: pointer;
+  font-size: 14px;
+  padding: 2px 6px;
+}
+.skill-packs-row__remove:hover { color: #ef4444; }

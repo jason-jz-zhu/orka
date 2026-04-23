@@ -1,10 +1,12 @@
-import { useDeferredValue, useEffect, useMemo, useRef, useState } from "react";
+import { lazy, Suspense, useDeferredValue, useEffect, useMemo, useRef, useState } from "react";
 import { useSkills, initSkillsWatcher, type SkillMeta } from "../lib/skills";
 import { SkillRunner } from "./SkillRunner";
-import { TrustedTapsSection } from "./TrustedTapsSection";
 import { invokeCmd, listenEvent } from "../lib/tauri";
 import { alertDialog, confirmDialog, promptDialog } from "../lib/dialogs";
 import { open as openDialog } from "@tauri-apps/plugin-dialog";
+// Lazy: the marketplace modal pulls AddTapModal behind it. Only mounted
+// when the user explicitly opens "Browse skill packs" from the add menu.
+const SkillPacksModal = lazy(() => import("./SkillPacksModal"));
 
 type PrewarmProgress = {
   current: number;
@@ -128,7 +130,9 @@ export function SkillsTab({ onOpenInCanvas }: SkillsTabProps = {}) {
   // can arrive in the app (create, import, install from tap).
   const [addMenuOpen, setAddMenuOpen] = useState(false);
   const addMenuRef = useRef<HTMLDivElement | null>(null);
-  const tapsRef = useRef<HTMLDivElement | null>(null);
+  // Marketplace ("Browse skill packs") opens from the add menu now —
+  // the old sidebar section was retired to reclaim the space.
+  const [showSkillPacks, setShowSkillPacks] = useState(false);
 
   // Close the add-menu on outside click + Escape. Standard popover
   // pattern — subscribes only while the menu is open.
@@ -151,12 +155,9 @@ export function SkillsTab({ onOpenInCanvas }: SkillsTabProps = {}) {
     };
   }, [addMenuOpen]);
 
-  function focusTaps() {
+  function openSkillPacks() {
     setAddMenuOpen(false);
-    // Scroll the Trusted Taps section into view — user still clicks
-    // the section header to expand if it's collapsed. A brief yellow
-    // flash would be nicer but scrollIntoView is enough for v1.
-    tapsRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
+    setShowSkillPacks(true);
   }
 
   /** Import a skill folder from anywhere on disk. Opens a native folder
@@ -358,13 +359,13 @@ export function SkillsTab({ onOpenInCanvas }: SkillsTabProps = {}) {
                     type="button"
                     role="menuitem"
                     className="skills-tab__add-menu-item"
-                    onClick={focusTaps}
+                    onClick={openSkillPacks}
                   >
-                    <span className="skills-tab__add-menu-icon">🔗</span>
+                    <span className="skills-tab__add-menu-icon">📦</span>
                     <span className="skills-tab__add-menu-label">
-                      Install from tap
+                      Browse skill packs
                       <span className="skills-tab__add-menu-hint">
-                        jump to Trusted Sources
+                        hire from a community source (gstack, etc.)
                       </span>
                     </span>
                   </button>
@@ -495,9 +496,6 @@ export function SkillsTab({ onOpenInCanvas }: SkillsTabProps = {}) {
             );
           })}
         </div>
-        <div ref={tapsRef}>
-          <TrustedTapsSection />
-        </div>
       </aside>
 
       <section className="skills-tab__runner">
@@ -518,6 +516,12 @@ export function SkillsTab({ onOpenInCanvas }: SkillsTabProps = {}) {
           </div>
         )}
       </section>
+
+      {showSkillPacks && (
+        <Suspense fallback={null}>
+          <SkillPacksModal onClose={() => setShowSkillPacks(false)} />
+        </Suspense>
+      )}
     </div>
   );
 }
