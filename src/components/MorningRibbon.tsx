@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import type { ProjectInfo, SessionInfo } from "../lib/session-types";
 import { invokeCmd, listenEvent } from "../lib/tauri";
 import { useRuns } from "../lib/runs";
@@ -84,6 +84,41 @@ export function MorningRibbon({ onJumpToSessions, onJumpToRuns }: Props) {
     [sessions, runs, pinned],
   );
 
+  // Attention pulse: when an actionable count goes UP we briefly flash
+  // the chip so the user notices even if their eyes aren't on the
+  // ribbon. Uses a ref to remember the last-seen count and a keyed
+  // state bump to retrigger the CSS animation. Pairs with the existing
+  // playReadyPing() audio cue for multi-modal awareness.
+  const lastAwaitingRef = useRef<number | null>(null);
+  const lastOvernightRef = useRef<number | null>(null);
+  const [pulseKey, setPulseKey] = useState(0);
+  const [awaitingPulsing, setAwaitingPulsing] = useState(false);
+  const [overnightPulsing, setOvernightPulsing] = useState(false);
+  useEffect(() => {
+    const a = buckets.awaitingReview.length;
+    const prev = lastAwaitingRef.current;
+    if (prev !== null && a > prev) {
+      setAwaitingPulsing(true);
+      setPulseKey((k) => k + 1);
+      const t = setTimeout(() => setAwaitingPulsing(false), 1600);
+      lastAwaitingRef.current = a;
+      return () => clearTimeout(t);
+    }
+    lastAwaitingRef.current = a;
+  }, [buckets.awaitingReview.length]);
+  useEffect(() => {
+    const o = buckets.overnight.length;
+    const prev = lastOvernightRef.current;
+    if (prev !== null && o > prev) {
+      setOvernightPulsing(true);
+      setPulseKey((k) => k + 1);
+      const t = setTimeout(() => setOvernightPulsing(false), 1600);
+      lastOvernightRef.current = o;
+      return () => clearTimeout(t);
+    }
+    lastOvernightRef.current = o;
+  }, [buckets.overnight.length]);
+
   return (
     <div className="morning-ribbon" role="status">
       <Chip
@@ -92,6 +127,7 @@ export function MorningRibbon({ onJumpToSessions, onJumpToRuns }: Props) {
         label="overnight"
         onClick={onJumpToRuns}
         title={`${buckets.overnight.length} run(s) in the last 18 hours — click to open the Logbook`}
+        pulseKey={overnightPulsing ? pulseKey : 0}
       />
       <Chip
         icon="✅"
@@ -99,6 +135,7 @@ export function MorningRibbon({ onJumpToSessions, onJumpToRuns }: Props) {
         label="awaiting"
         onClick={onJumpToSessions}
         title={`${buckets.awaitingReview.length} session(s) need your review — click to open the Workforce`}
+        pulseKey={awaitingPulsing ? pulseKey : 0}
       />
       <Chip
         icon="🔔"
@@ -142,18 +179,27 @@ function Chip({
   label,
   onClick,
   title,
+  pulseKey,
 }: {
   icon: string;
   count: number;
   label: string;
   onClick: () => void;
   title: string;
+  /** Non-zero key forces the pulse animation to restart — we re-key
+   *  the DOM element so React remounts it and the keyframes replay. */
+  pulseKey?: number;
 }) {
   const dim = count === 0;
   return (
     <button
       type="button"
-      className={`morning-ribbon__chip${dim ? " morning-ribbon__chip--dim" : ""}`}
+      key={pulseKey ? `pulse-${pulseKey}` : undefined}
+      className={
+        "morning-ribbon__chip" +
+        (dim ? " morning-ribbon__chip--dim" : "") +
+        (pulseKey ? " morning-ribbon__chip--pulse" : "")
+      }
       onClick={onClick}
       title={title}
     >
