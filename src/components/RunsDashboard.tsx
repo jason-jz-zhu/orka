@@ -3,7 +3,7 @@ import { useRuns, type RunRecord } from "../lib/runs";
 import type { SessionInfo } from "../lib/session-types";
 import { invokeCmd } from "../lib/tauri";
 import { alertDialog, confirmDialog } from "../lib/dialogs";
-import { TerminalLaunchButton } from "./TerminalLaunchButton";
+import { openSessionInTerminal } from "../lib/terminal-config";
 import { MeetingModal } from "./MeetingModal";
 import { meetingSessionIdsForRuns } from "../lib/run-meeting";
 import { runSubtitle } from "../lib/run-subtitle";
@@ -314,21 +314,41 @@ const RunRow = memo(function RunRow({
           </div>
         </div>
         {hasSession && (
-          // The runs dashboard row is itself clickable; stopPropagation
-          // on the wrapper prevents the row's onClick from firing when
-          // the user is targeting the split button or its menu.
-          <div
-            className="runs-dash__term-slot"
-            onClick={(e) => e.stopPropagation()}
-            onMouseDown={(e) => e.stopPropagation()}
+          <button
+            type="button"
+            className="runs-dash__term-btn"
+            title="Continue in terminal (claude --resume)"
+            onClick={async (e) => {
+              e.stopPropagation();
+              try {
+                const result = await openSessionInTerminal(
+                  run.id,
+                  run.session_id!,
+                  run.workdir ?? null,
+                );
+                if (result.clipboard_payload) {
+                  try {
+                    await navigator.clipboard.writeText(
+                      result.clipboard_payload,
+                    );
+                    await alertDialog(
+                      `Opened ${result.resolved}. Command copied to clipboard — press Ctrl+\` in VS Code and paste:\n\n${result.clipboard_payload}`,
+                      "Opened in VS Code",
+                    );
+                  } catch {
+                    await alertDialog(
+                      `Opened ${result.resolved}. Paste this in the terminal:\n\n${result.clipboard_payload}`,
+                      "Opened in VS Code",
+                    );
+                  }
+                }
+              } catch (err) {
+                await alertDialog(`Open terminal failed: ${err}`);
+              }
+            }}
           >
-            <TerminalLaunchButton
-              runId={run.id}
-              sessionId={run.session_id!}
-              workdir={run.workdir}
-              onError={(msg) => void alertDialog(msg)}
-            />
-          </div>
+            ⌨ Terminal
+          </button>
         )}
         {run.workdir && (
           <button
