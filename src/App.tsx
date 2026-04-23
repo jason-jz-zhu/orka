@@ -43,6 +43,9 @@ import {
 const PipelineLibrary = lazy(() => import("./components/PipelineLibrary"));
 const SkillPalette = lazy(() => import("./components/SkillPalette"));
 const RunsDashboard = lazy(() => import("./components/RunsDashboard"));
+// Morning ribbon is cheap and always visible — no lazy load benefit
+// and delaying it would flash the chips in mid-session.
+import { MorningRibbon } from "./components/MorningRibbon";
 const ModelSettingsModal = lazy(() =>
   import("./components/ModelSettingsModal").then((m) => ({
     default: m.ModelSettingsModal,
@@ -648,6 +651,14 @@ export default function App() {
 
   return (
     <div className="app">
+      {/* Morning ribbon: always-visible "standup" strip. Replaces the
+          earlier Today tab — it kept duplicating Sessions/Runs content
+          in exchange for a nav slot. The ribbon delivers the same
+          operator-at-a-glance awareness without burning the slot. */}
+      <MorningRibbon
+        onJumpToSessions={() => setTab("monitor")}
+        onJumpToRuns={() => setTab("runs")}
+      />
       <div className="toolbar">
         <WorkspaceSwitcher />
         <div className="toolbar__divider" />
@@ -657,8 +668,12 @@ export default function App() {
             aria-selected={tab === "monitor"}
             className={"tabs__item" + (tab === "monitor" ? " tabs__item--active" : "")}
             onClick={() => setTab("monitor")}
+            // Tab key stays `"monitor"` for persistence / analytics
+            // compatibility; only the user-visible label flips to the
+            // operator-narrative wording.
+            title="Live Claude Code sessions — your workforce"
           >
-            Sessions
+            Workforce
           </button>
           <button
             role="tab"
@@ -673,8 +688,12 @@ export default function App() {
             aria-selected={tab === "runs"}
             className={"tabs__item" + (tab === "runs" ? " tabs__item--active" : "")}
             onClick={() => setTab("runs")}
+            // Tab key stays `"runs"` for state/analytics continuity;
+            // only the user-visible label flips to the operator-narrative
+            // "Logbook" (a crew's record of delivered work).
+            title="Delivered work by your agents — the logbook"
           >
-            Runs
+            Logbook
           </button>
           {canvasEnabled && (
             <div
@@ -750,7 +769,12 @@ export default function App() {
         >
           ⚙︎
         </button>
-        <span className="toolbar__title">Orka</span>
+        <div className="toolbar__brand">
+          <span className="toolbar__title">Orka</span>
+          <span className="toolbar__tagline">
+            the operator layer for your digital workforce
+          </span>
+        </div>
       </div>
       {/* Skills + Sessions stay mounted (cheap, preserves scroll/filter state).
           Pipeline canvas + RunsDashboard conditionally mount — ReactFlow in particular

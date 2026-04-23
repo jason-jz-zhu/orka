@@ -13,7 +13,7 @@ import { useGraph } from "../lib/graph-store";
 import SessionCard from "./SessionCard";
 import SessionDetail from "./SessionDetail";
 import PipelineNodeCard from "./PipelineNodeCard";
-import { SynthesisModal } from "./SynthesisModal";
+import { MeetingModal } from "./MeetingModal";
 import { useReviewedSessions } from "../hooks/useReviewedSessions";
 import {
   playReadyPing,
@@ -58,8 +58,11 @@ export default function SessionDashboard({
   const [toast, setToast] = useState<string | null>(null);
   const { reviewedMap, markReviewed } = useReviewedSessions();
   const [soundOn, setSoundOn] = useState<boolean>(() => isSoundEnabled());
-  const [synthSelected, setSynthSelected] = useState<Set<string>>(new Set());
-  const [showSynth, setShowSynth] = useState(false);
+  // Attendee selection for the "Call a meeting" action (cross-session
+  // synthesis under the hood — same Rust command, but operator-layer
+  // vocabulary everywhere user-facing).
+  const [attendeeIds, setAttendeeIds] = useState<Set<string>>(new Set());
+  const [showMeeting, setShowMeeting] = useState(false);
   // Per-session awaiting_user from last frame — used to detect the
   // "Claude just finished a turn" transition so we can ping and reset
   // the reviewed flag at the right moments.
@@ -466,12 +469,12 @@ export default function SessionDashboard({
               isReviewed={reviewedMap[s.id] === s.modified_ms}
               isPinned={pinnedSessionIds.has(s.id)}
               selected={selected?.id === s.id}
-              synthSelected={synthSelected.has(s.id)}
+              synthSelected={attendeeIds.has(s.id)}
               onOpen={openSession}
               onPin={pinSession}
               onUnpin={unpinSession}
               onSynthToggle={(session) => {
-                setSynthSelected((prev) => {
+                setAttendeeIds((prev) => {
                   const next = new Set(prev);
                   if (next.has(session.id)) next.delete(session.id);
                   else next.add(session.id);
@@ -483,38 +486,39 @@ export default function SessionDashboard({
         </div>
       </div>
 
-      {synthSelected.size > 0 && (
+      {attendeeIds.size > 0 && (
         <div className="dashboard__synth-bar">
           <span className="dashboard__synth-hint">
-            {synthSelected.size} session{synthSelected.size === 1 ? "" : "s"} selected ·
-            shift-click to toggle
+            {attendeeIds.size} attendee
+            {attendeeIds.size === 1 ? "" : "s"} selected — pick ≥2 to call a
+            cross-functional sync
           </span>
           <div className="dashboard__synth-spacer" />
           <button
             className="dashboard__synth-btn dashboard__synth-btn--ghost"
-            onClick={() => setSynthSelected(new Set())}
+            onClick={() => setAttendeeIds(new Set())}
           >
             Clear
           </button>
           <button
             className="dashboard__synth-btn"
-            disabled={synthSelected.size < 2}
-            onClick={() => setShowSynth(true)}
+            disabled={attendeeIds.size < 2}
+            onClick={() => setShowMeeting(true)}
             title={
-              synthSelected.size < 2
-                ? "Shift-click a second session to enable"
-                : "Ask a question across all selected sessions"
+              attendeeIds.size < 2
+                ? "Add one more attendee to start a meeting"
+                : "Synthesise all selected sessions into meeting minutes"
             }
           >
-            📚 Ask across {synthSelected.size}
+            ☎ Call a meeting with {attendeeIds.size}
           </button>
         </div>
       )}
 
-      {showSynth && (
-        <SynthesisModal
-          sources={sessions.filter((s) => synthSelected.has(s.id))}
-          onClose={() => setShowSynth(false)}
+      {showMeeting && (
+        <MeetingModal
+          attendees={sessions.filter((s) => attendeeIds.has(s.id))}
+          onClose={() => setShowMeeting(false)}
         />
       )}
 

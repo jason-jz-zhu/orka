@@ -1,10 +1,14 @@
-import { useDeferredValue, useEffect, useMemo, useRef, useState } from "react";
+import { lazy, Suspense, useDeferredValue, useEffect, useMemo, useRef, useState } from "react";
 import { useSkills, initSkillsWatcher, type SkillMeta } from "../lib/skills";
+import { useRuns } from "../lib/runs";
 import { SkillRunner } from "./SkillRunner";
-import { TrustedTapsSection } from "./TrustedTapsSection";
 import { invokeCmd, listenEvent } from "../lib/tauri";
 import { alertDialog, confirmDialog, promptDialog } from "../lib/dialogs";
 import { open as openDialog } from "@tauri-apps/plugin-dialog";
+import { lastDeliveredBySkill, fmtLastDelivered } from "../lib/skill-activity";
+// Lazy: the marketplace modal pulls AddTapModal behind it. Only mounted
+// when the user explicitly opens "Browse skill packs" from the add menu.
+const SkillPacksModal = lazy(() => import("./SkillPacksModal"));
 
 type PrewarmProgress = {
   current: number;
@@ -84,6 +88,15 @@ export function SkillsTab({ onOpenInCanvas }: SkillsTabProps = {}) {
   const skills = useSkills((s) => s.skills);
   const loading = useSkills((s) => s.loading);
   const refresh = useSkills((s) => s.refresh);
+  // Pull run history so each skill card can show "last delivered Nh ago".
+  // `useRuns` maintains a shared cached list; one fetch here is reused by
+  // Logbook, the morning ribbon, and Today's bucket logic.
+  const runs = useRuns((s) => s.runs);
+  const refreshRuns = useRuns((s) => s.refresh);
+  useEffect(() => {
+    void refreshRuns();
+  }, [refreshRuns]);
+  const lastDelivered = useMemo(() => lastDeliveredBySkill(runs), [runs]);
   const [filter, setFilter] = useState("");
   const [selectedSlug, setSelectedSlug] = useState<string | null>(null);
 
@@ -128,7 +141,9 @@ export function SkillsTab({ onOpenInCanvas }: SkillsTabProps = {}) {
   // can arrive in the app (create, import, install from tap).
   const [addMenuOpen, setAddMenuOpen] = useState(false);
   const addMenuRef = useRef<HTMLDivElement | null>(null);
-  const tapsRef = useRef<HTMLDivElement | null>(null);
+  // Marketplace ("Browse skill packs") opens from the add menu now —
+  // the old sidebar section was retired to reclaim the space.
+  const [showSkillPacks, setShowSkillPacks] = useState(false);
 
   // Close the add-menu on outside click + Escape. Standard popover
   // pattern — subscribes only while the menu is open.
@@ -151,12 +166,9 @@ export function SkillsTab({ onOpenInCanvas }: SkillsTabProps = {}) {
     };
   }, [addMenuOpen]);
 
-  function focusTaps() {
+  function openSkillPacks() {
     setAddMenuOpen(false);
-    // Scroll the Trusted Taps section into view — user still clicks
-    // the section header to expand if it's collapsed. A brief yellow
-    // flash would be nicer but scrollIntoView is enough for v1.
-    tapsRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
+    setShowSkillPacks(true);
   }
 
   /** Import a skill folder from anywhere on disk. Opens a native folder
@@ -310,13 +322,13 @@ export function SkillsTab({ onOpenInCanvas }: SkillsTabProps = {}) {
           <div className="sidebar__header-actions">
             <div className="skills-tab__add-wrap" ref={addMenuRef}>
               <button
-                className="sidebar__toggle"
+                className="sidebar__toggle skills-tab__hire-btn"
                 onClick={() => setAddMenuOpen((v) => !v)}
                 aria-haspopup="menu"
                 aria-expanded={addMenuOpen}
-                title="Add a skill"
+                title="Hire a new agent — create one, import a folder, or browse a skill pack"
               >
-                + ▾
+                + Hire ▾
               </button>
               {addMenuOpen && (
                 <div className="skills-tab__add-menu" role="menu">
@@ -358,13 +370,13 @@ export function SkillsTab({ onOpenInCanvas }: SkillsTabProps = {}) {
                     type="button"
                     role="menuitem"
                     className="skills-tab__add-menu-item"
-                    onClick={focusTaps}
+                    onClick={openSkillPacks}
                   >
-                    <span className="skills-tab__add-menu-icon">🔗</span>
+                    <span className="skills-tab__add-menu-icon">📦</span>
                     <span className="skills-tab__add-menu-label">
-                      Install from tap
+                      Browse skill packs
                       <span className="skills-tab__add-menu-hint">
-                        jump to Trusted Sources
+                        hire from a community source (gstack, etc.)
                       </span>
                     </span>
                   </button>
@@ -453,6 +465,19 @@ export function SkillsTab({ onOpenInCanvas }: SkillsTabProps = {}) {
                     {s.has_graph && (
                       <span className="skills-tab__composite-tag">pipeline</span>
                     )}
+                    {/* "Last delivered" badge: puts an employee-review
+                        vibe on the sidebar. Skills that never ran get
+                        no badge (don't clutter the row). */}
+                    {lastDelivered.has(s.slug) && (
+                      <span
+                        className="skills-tab__last-run"
+                        title={new Date(
+                          lastDelivered.get(s.slug)!,
+                        ).toLocaleString()}
+                      >
+                        · {fmtLastDelivered(lastDelivered.get(s.slug)!)}
+                      </span>
+                    )}
                   </div>
                   <div className="skills-tab__desc">{firstSentence(s.description)}</div>
                 </div>
@@ -495,9 +520,6 @@ export function SkillsTab({ onOpenInCanvas }: SkillsTabProps = {}) {
             );
           })}
         </div>
-        <div ref={tapsRef}>
-          <TrustedTapsSection />
-        </div>
       </aside>
 
       <section className="skills-tab__runner">
@@ -518,6 +540,12 @@ export function SkillsTab({ onOpenInCanvas }: SkillsTabProps = {}) {
           </div>
         )}
       </section>
+
+      {showSkillPacks && (
+        <Suspense fallback={null}>
+          <SkillPacksModal onClose={() => setShowSkillPacks(false)} />
+        </Suspense>
+      )}
     </div>
   );
 }

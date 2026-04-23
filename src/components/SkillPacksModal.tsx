@@ -2,8 +2,8 @@ import { lazy, Suspense, useCallback, useEffect, useState } from "react";
 import { invokeCmd } from "../lib/tauri";
 import { useSkills } from "../lib/skills";
 import { alertDialog, confirmDialog } from "../lib/dialogs";
-// Lazy: the modal pulls the URL parser + its own styles. Only mounted
-// when the user opens it, so the sidebar cost stays tiny.
+// Lazy: the add-tap flow has its own form + URL parser. Only mounted
+// when the user opts in, so the modal cost stays small.
 const AddTapModal = lazy(() => import("./AddTapModal"));
 
 export interface Tap {
@@ -17,24 +17,26 @@ export interface Tap {
 }
 
 type Props = {
-  /** Collapsed by default; parent can persist state if desired. */
-  defaultCollapsed?: boolean;
+  onClose: () => void;
 };
 
 /**
- * Sidebar section listing authoritative tap sources (gstack, etc).
- * Each tap shows install/uninstall state; installing clones the repo
- * into ~/.orka/taps/<id>/ and symlinks each skill into
- * ~/.claude/skills/<id>-<slug>/ so both Orka and Claude Code pick it up.
+ * "Skill packs" modal — the hiring-from-a-staffing-agency path.
  *
- * Users can add custom taps via the "+ Add tap" button. Builtins are
- * always shown first; user-added taps follow alphabetically.
+ * Replaces the old sidebar "Trusted Sources" section. Rationale: the
+ * sidebar permanently spent ~200px on a feature the user only engages
+ * with when they want to hire. Folding it into the "+ Hire an agent"
+ * menu keeps the sidebar focused on the user's actual team and
+ * surfaces the marketplace when the intent is explicit.
+ *
+ * Same backend commands as before (list_trusted_taps / install_tap /
+ * uninstall_tap / remove_custom_tap) — only the entry point and
+ * packaging changed.
  */
-export function TrustedTapsSection({ defaultCollapsed }: Props) {
+export default function SkillPacksModal({ onClose }: Props) {
   const [taps, setTaps] = useState<Tap[]>([]);
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState<string | null>(null);
-  const [collapsed, setCollapsed] = useState(!!defaultCollapsed);
   const [showAdd, setShowAdd] = useState(false);
   const refreshSkills = useSkills((s) => s.refresh);
 
@@ -42,8 +44,6 @@ export function TrustedTapsSection({ defaultCollapsed }: Props) {
     setLoading(true);
     try {
       const list = await invokeCmd<Tap[]>("list_trusted_taps");
-      // Accept both camelCase and snake_case from the backend serializer —
-      // be defensive in case serde changes.
       const normalized: Tap[] = (list ?? []).map((t) => ({
         id: t.id,
         name: t.name,
@@ -61,7 +61,7 @@ export function TrustedTapsSection({ defaultCollapsed }: Props) {
       }));
       setTaps(normalized);
     } catch (e) {
-      console.warn("[taps] list failed:", e);
+      console.warn("[skill-packs] list failed:", e);
     } finally {
       setLoading(false);
     }
@@ -78,7 +78,7 @@ export function TrustedTapsSection({ defaultCollapsed }: Props) {
       await load();
       await refreshSkills();
       await alertDialog(
-        `Installed ${tap.name}: ${linked} skill${linked === 1 ? "" : "s"} linked.`,
+        `Hired from ${tap.name}: ${linked} agent${linked === 1 ? "" : "s"} joined your team.`,
       );
     } catch (e) {
       await alertDialog(`Install failed: ${e}`);
@@ -89,8 +89,8 @@ export function TrustedTapsSection({ defaultCollapsed }: Props) {
 
   async function uninstall(tap: Tap) {
     const ok = await confirmDialog(
-      `Uninstall ${tap.name}? This removes the tap clone and its skill links. Your own skills are untouched.`,
-      { title: "Uninstall tap?", okLabel: "Uninstall", cancelLabel: "Cancel" },
+      `Let go of ${tap.name}? This removes the tap clone and its skill links. Your own skills are untouched.`,
+      { title: "Uninstall pack?", okLabel: "Uninstall", cancelLabel: "Cancel" },
     );
     if (!ok) return;
     setBusy(tap.id);
@@ -105,16 +105,10 @@ export function TrustedTapsSection({ defaultCollapsed }: Props) {
     }
   }
 
-  // Modal-based add flow replaces the old 3-step prompt chain.
-  // Opens a single form with URL parsing + optional repo preview.
-  function addCustom() {
-    setShowAdd(true);
-  }
-
   async function removeCustom(tap: Tap) {
     const ok = await confirmDialog(
-      `Remove "${tap.name}" from your tap list? If it's installed, uninstall it first.`,
-      { title: "Remove custom tap?" },
+      `Remove "${tap.name}" from your list? If it's installed, uninstall it first.`,
+      { title: "Remove custom pack?" },
     );
     if (!ok) return;
     if (tap.installed) {
@@ -130,66 +124,65 @@ export function TrustedTapsSection({ defaultCollapsed }: Props) {
   }
 
   return (
-    <div className="taps-section">
-      <div className="taps-section__header">
-        <button
-          type="button"
-          className="taps-section__toggle"
-          onClick={() => setCollapsed((c) => !c)}
-        >
-          <span className="taps-section__toggle-icon">{collapsed ? "▸" : "▾"}</span>
-          <span className="taps-section__title">🏛 Trusted Sources</span>
-          <span className="taps-section__count">
-            {taps.filter((t) => t.installed).length}/{taps.length}
-          </span>
-        </button>
-        {/* Header-level Add button — reachable even when the body is
-            collapsed OR when the body is scrolled past the bottom. The
-            inline "+ Add tap…" at the bottom of the body stays too,
-            for discoverability once users are browsing the section. */}
-        <button
-          type="button"
-          className="taps-section__add-icon"
-          onClick={(e) => {
-            e.stopPropagation();
-            setCollapsed(false);
-            addCustom();
-          }}
-          title="Add a new tap"
-          aria-label="Add tap"
-        >
-          +
-        </button>
-      </div>
-      {!collapsed && (
-        <div className="taps-section__body">
-          {loading && <div className="taps-section__status">loading…</div>}
+    <div className="modal-overlay" onClick={onClose}>
+      <div
+        className="modal-box skill-packs-modal"
+        onClick={(e) => e.stopPropagation()}
+      >
+        <div className="modal-header">
+          <div>
+            <div className="modal-title">📦 Browse skill packs</div>
+            <div className="modal-subtitle">
+              Hire pre-built agents from a community source. Each pack is a
+              git repo of SKILL.md files — installing clones it locally and
+              links each skill into your team.
+            </div>
+          </div>
+          <button className="modal-close" onClick={onClose}>
+            ✕
+          </button>
+        </div>
+
+        <div className="skill-packs-modal__list">
+          {loading && (
+            <div className="skill-packs-modal__status">Loading…</div>
+          )}
+          {!loading && taps.length === 0 && (
+            <div className="skill-packs-modal__status">
+              No packs yet. Click “Add custom pack” to wire one up.
+            </div>
+          )}
           {!loading &&
             taps.map((t) => (
-              <div key={t.id} className="taps-row">
-                <div className="taps-row__info">
-                  <div className="taps-row__name">
+              <div key={t.id} className="skill-packs-row">
+                <div className="skill-packs-row__info">
+                  <div className="skill-packs-row__name">
                     📍 {t.name}
                     {!t.isBuiltin && (
-                      <span className="taps-row__custom-tag">custom</span>
+                      <span className="skill-packs-row__custom-tag">custom</span>
                     )}
                     {t.installed && (
-                      <span className="taps-row__count">· {t.skillCount}</span>
+                      <span className="skill-packs-row__count">
+                        · {t.skillCount} agent{t.skillCount === 1 ? "" : "s"}
+                      </span>
                     )}
                   </div>
                   {t.description && (
-                    <div className="taps-row__desc" title={t.description}>
+                    <div
+                      className="skill-packs-row__desc"
+                      title={t.description}
+                    >
                       {t.description}
                     </div>
                   )}
                 </div>
-                <div className="taps-row__actions">
+                <div className="skill-packs-row__actions">
                   {busy === t.id ? (
-                    <span className="taps-row__busy">⏳</span>
+                    <span className="skill-packs-row__busy">⏳</span>
                   ) : t.installed ? (
                     <button
                       type="button"
-                      className="taps-row__btn taps-row__btn--ghost"
+                      className="modal-btn"
                       onClick={() => void uninstall(t)}
                       title={`Uninstall ${t.name}`}
                     >
@@ -198,17 +191,17 @@ export function TrustedTapsSection({ defaultCollapsed }: Props) {
                   ) : (
                     <button
                       type="button"
-                      className="taps-row__btn"
+                      className="modal-btn modal-btn--primary"
                       onClick={() => void install(t)}
                       title={`Clone ${t.url}`}
                     >
-                      Install
+                      Hire
                     </button>
                   )}
                   {!t.isBuiltin && !t.installed && (
                     <button
                       type="button"
-                      className="taps-row__remove"
+                      className="skill-packs-row__remove"
                       onClick={() => void removeCustom(t)}
                       title="Remove from list (doesn't affect installed state)"
                     >
@@ -219,15 +212,26 @@ export function TrustedTapsSection({ defaultCollapsed }: Props) {
               </div>
             ))}
         </div>
-      )}
-      {showAdd && (
-        <Suspense fallback={null}>
-          <AddTapModal
-            onClose={() => setShowAdd(false)}
-            onAdded={() => void load()}
-          />
-        </Suspense>
-      )}
+
+        <div className="skill-packs-modal__footer">
+          <button
+            type="button"
+            className="modal-btn"
+            onClick={() => setShowAdd(true)}
+          >
+            + Add custom pack
+          </button>
+        </div>
+
+        {showAdd && (
+          <Suspense fallback={null}>
+            <AddTapModal
+              onClose={() => setShowAdd(false)}
+              onAdded={() => void load()}
+            />
+          </Suspense>
+        )}
+      </div>
     </div>
   );
 }
