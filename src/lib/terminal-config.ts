@@ -35,11 +35,17 @@ export async function openSessionInTerminal(
   runId: string,
   sessionId: string,
   workdir: string | null = null,
+  /** Optional per-click override. When provided, this terminal is
+   *  launched this time regardless of the saved preference — useful
+   *  for the split-button dropdown that lets users pick another
+   *  terminal without changing their default. */
+  terminalPreset: TerminalPreference | null = null,
 ): Promise<LaunchResult> {
   return await invokeCmd<LaunchResult>("open_session_in_terminal", {
     runId,
     sessionId,
     workdir,
+    terminalPreset,
   });
 }
 

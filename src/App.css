@@ -6512,3 +6512,109 @@ h5.block-card__heading, h6.block-card__heading { font-size: 11px; color: #8a92a0
   font-size: 13px;
 }
 .skill-runner__trail-open:hover { color: #e6e6e6; }
+
+/* ============================================================
+   Split-button TerminalLaunchButton — primary opens in the saved
+   default terminal; the chevron opens a menu to pick a different
+   terminal for this click only (no preference change).
+   ============================================================ */
+.term-launch {
+  position: relative;
+  display: inline-flex;
+  align-items: stretch;
+}
+.term-launch__main,
+.term-launch__chevron {
+  background: rgba(255, 255, 255, 0.04);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  color: #e6e6e6;
+  font-size: 12px;
+  padding: 4px 10px;
+  cursor: pointer;
+}
+.term-launch__main {
+  border-top-left-radius: 4px;
+  border-bottom-left-radius: 4px;
+  border-right: none;
+}
+.term-launch__main:hover:not(:disabled) {
+  background: rgba(255, 255, 255, 0.08);
+}
+.term-launch__main:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+.term-launch__chevron {
+  border-top-right-radius: 4px;
+  border-bottom-right-radius: 4px;
+  padding: 4px 6px;
+}
+.term-launch__chevron:hover {
+  background: rgba(255, 255, 255, 0.1);
+}
+.term-launch__notice {
+  position: absolute;
+  left: 100%;
+  top: 50%;
+  transform: translateY(-50%);
+  margin-left: 8px;
+  font-size: 11px;
+  color: #4ade80;
+  white-space: nowrap;
+  opacity: 0.85;
+}
+.term-launch__menu {
+  position: absolute;
+  top: 100%;
+  right: 0;
+  margin-top: 4px;
+  background: #161a20;
+  border: 1px solid #2b3038;
+  border-radius: 6px;
+  min-width: 180px;
+  z-index: 10;
+  box-shadow: 0 6px 20px rgba(0, 0, 0, 0.35);
+  padding: 4px;
+}
+.term-launch__menu-empty {
+  padding: 8px 10px;
+  color: #94a3b8;
+  font-size: 12px;
+  text-align: center;
+}
+.term-launch__menu-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  width: 100%;
+  background: transparent;
+  border: none;
+  color: #e6e6e6;
+  font-size: 12px;
+  padding: 6px 10px;
+  border-radius: 4px;
+  cursor: pointer;
+  text-align: left;
+}
+.term-launch__menu-item:hover {
+  background: rgba(255, 255, 255, 0.05);
+}
+.term-launch__menu-item--default .term-launch__menu-label {
+  font-weight: 500;
+}
+.term-launch__menu-label {
+  flex: 1;
+}
+.term-launch__menu-badge {
+  font-size: 10px;
+  padding: 1px 6px;
+  border-radius: 99px;
+  background: rgba(168, 85, 247, 0.18);
+  color: #c4b5fd;
+  letter-spacing: 0.04em;
+}
+.term-launch__menu-sep {
+  height: 1px;
+  background: #22262e;
+  margin: 4px 0;
+}

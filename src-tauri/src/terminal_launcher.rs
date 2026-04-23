@@ -506,11 +506,20 @@ pub fn detect_available_terminals() -> Vec<String> {
     detect_terminals()
 }
 
+/// Launch `claude --resume <session>` in the user's terminal.
+///
+/// `terminal_preset` is an optional per-call override for the terminal
+/// preset. When provided (and valid), bypasses the saved preference so
+/// the frontend split button can launch a specific terminal this click
+/// without changing the user's default. Accepts the same slugs as the
+/// config: `"auto"`, `"terminal-app"`, `"iterm"`, `"warp"`, `"vscode"`,
+/// `"custom"`.
 #[tauri::command]
 pub async fn open_session_in_terminal(
     run_id: String,
     session_id: String,
     workdir: Option<String>,
+    terminal_preset: Option<String>,
 ) -> Result<LaunchResult, String> {
     if !valid_session_id(&session_id) {
         return Err(format!("invalid session_id shape: {session_id:?}"));
@@ -560,7 +569,22 @@ pub async fn open_session_in_terminal(
 
     let cfg = load();
     let available = detect_terminals();
-    let resolved = resolve_preference(&cfg.preference, &available);
+    // Per-call override takes priority over the saved preference. Only
+    // accept known slugs so the caller can't smuggle a custom template
+    // through this path (those require the explicit "custom" preset +
+    // validated template on the config).
+    let pref_source = match terminal_preset.as_deref() {
+        Some(p)
+            if matches!(
+                p,
+                "auto" | "terminal-app" | "iterm" | "warp" | "vscode" | "custom"
+            ) =>
+        {
+            p
+        }
+        _ => cfg.preference.as_str(),
+    };
+    let resolved = resolve_preference(pref_source, &available);
 
     match resolved.as_str() {
         "terminal-app" => {
