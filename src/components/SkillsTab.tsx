@@ -13,6 +13,11 @@ import {
 // Lazy: the marketplace modal pulls AddTapModal behind it. Only mounted
 // when the user explicitly opens "Browse skill packs" from the add menu.
 const SkillPacksModal = lazy(() => import("./SkillPacksModal"));
+// Lazy: HireChatModal pulls react-markdown; we only pay for it when
+// the user actually clicks "Hire by chat".
+const HireChatModal = lazy(() =>
+  import("./HireChatModal").then((m) => ({ default: m.HireChatModal })),
+);
 
 type PrewarmProgress = {
   current: number;
@@ -164,6 +169,10 @@ export function SkillsTab({ onOpenInCanvas }: SkillsTabProps = {}) {
   // Marketplace ("Browse skill packs") opens from the add menu now —
   // the old sidebar section was retired to reclaim the space.
   const [showSkillPacks, setShowSkillPacks] = useState(false);
+  // Hire-by-chat modal state. `initialGoal` is the optional seed from
+  // the prompt version; empty string lets the user start the chat with
+  // their own opening line. `null` = modal closed.
+  const [hireChatOpen, setHireChatOpen] = useState<string | null>(null);
 
   // Close the add-menu on outside click + Escape. Standard popover
   // pattern — subscribes only while the menu is open.
@@ -191,23 +200,19 @@ export function SkillsTab({ onOpenInCanvas }: SkillsTabProps = {}) {
     setShowSkillPacks(true);
   }
 
-  /** Single-sentence hiring flow. Collects a goal from the user, lands
-   *  them on the orka-skill-builder runner with the goal pre-filled so
-   *  they can just hit Run. Cancelling the prompt is a no-op (menu was
-   *  already closed; sidebar stays where it was). */
-  async function hireByDescribe() {
-    const goal = await promptDialog(
-      "One sentence: what should this agent do?",
-      {
-        title: "Hire a new agent",
-        default:
-          "Every morning, summarize yesterday's PRs I reviewed and email me the top 3.",
-      },
-    );
-    const trimmed = goal?.trim();
-    if (!trimmed) return;
-    setHireSeed(trimmed);
-    setSelectedSlug("orka-skill-builder");
+  /** Chat-based hiring flow (v2). Opens HireChatModal; the modal runs
+   *  the multi-turn conversation with orka-skill-builder, detects the
+   *  drafted SKILL.md in the stream, and writes it via the Rust
+   *  `save_drafted_skill` command when the user confirms.
+   *
+   *  Falling back to the v1 prompt-dialog flow is gone — the chat
+   *  modal handles the single-sentence case too (the goal pre-fills
+   *  the first turn and auto-sends). */
+  function hireByDescribe() {
+    // Empty string opens the modal without auto-sending, so the user
+    // can type their own opener. A future "quick hire" button could
+    // pass a prefilled seed instead.
+    setHireChatOpen("");
   }
 
   /** Import a skill folder from anywhere on disk. Opens a native folder
@@ -605,6 +610,22 @@ export function SkillsTab({ onOpenInCanvas }: SkillsTabProps = {}) {
         )}
       </section>
 
+      {hireChatOpen !== null && (
+        <Suspense fallback={null}>
+          <HireChatModal
+            initialGoal={hireChatOpen}
+            onClose={() => setHireChatOpen(null)}
+            onSaved={async (slug) => {
+              setHireChatOpen(null);
+              // Force a skill list refresh so the new slug shows up in
+              // the sidebar immediately — the filesystem watcher would
+              // catch it eventually, but we want zero-latency here.
+              await refresh();
+              setSelectedSlug(slug);
+            }}
+          />
+        </Suspense>
+      )}
       {showSkillPacks && (
         <Suspense fallback={null}>
           <SkillPacksModal onClose={() => setShowSkillPacks(false)} />

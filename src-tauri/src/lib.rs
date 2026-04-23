@@ -1,6 +1,7 @@
 mod annotations;
 mod claude_gate;
 mod model_config;
+mod hire_chat;
 mod session_brief;
 mod session_synthesis;
 mod skill_evolution;
@@ -1144,6 +1145,9 @@ pub fn run() {
             session_synthesis::continue_synthesis,
             session_synthesis::synthesize_sessions_stream,
             session_synthesis::continue_synthesis_stream,
+            hire_chat::start_hire_chat_stream,
+            hire_chat::continue_hire_chat_stream,
+            hire_chat::save_drafted_skill,
             model_config::get_model_config,
             model_config::set_model_config,
             perf_smoke::perf_smoke_test,
