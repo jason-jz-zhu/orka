@@ -688,8 +688,12 @@ export default function App() {
             aria-selected={tab === "runs"}
             className={"tabs__item" + (tab === "runs" ? " tabs__item--active" : "")}
             onClick={() => setTab("runs")}
+            // Tab key stays `"runs"` for state/analytics continuity;
+            // only the user-visible label flips to the operator-narrative
+            // "Logbook" (a crew's record of delivered work).
+            title="Delivered work by your agents — the logbook"
           >
-            Runs
+            Logbook
           </button>
           {canvasEnabled && (
             <div

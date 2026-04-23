@@ -59,7 +59,7 @@ test.describe("Call a meeting from Run History", () => {
     });
     await page.goto("/");
 
-    await page.getByRole("tab", { name: "Runs" }).click();
+    await page.getByRole("tab", { name: "Logbook" }).click();
 
     const rows = page.locator(".runs-dash__row");
     await expect(rows).toHaveCount(3, { timeout: 10_000 });
@@ -97,7 +97,7 @@ test.describe("Call a meeting from Run History", () => {
       },
     });
     await page.goto("/");
-    await page.getByRole("tab", { name: "Runs" }).click();
+    await page.getByRole("tab", { name: "Logbook" }).click();
 
     // Only the first row has a session and is checkable.
     const first = page.locator(".runs-dash__select-cell input[type='checkbox']").first();

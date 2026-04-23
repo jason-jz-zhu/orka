@@ -116,7 +116,7 @@ export default function RunsDashboard({ onOpenSession }: Props = {}) {
   return (
     <div className="runs-dash">
       <div className="runs-dash__header">
-        <span className="runs-dash__title">Run History</span>
+        <span className="runs-dash__title">Logbook</span>
         <div className="runs-dash__actions">
           {runs.length > 0 && (
             <button
