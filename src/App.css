@@ -6119,3 +6119,31 @@ h5.block-card__heading, h6.block-card__heading { font-size: 11px; color: #8a92a0
 .runs-dash__meeting-bar {
   margin: 10px 16px 0;
 }
+
+/* One-line descriptor under each run's skill name so rows aren't
+   indistinguishable when three runs share a skill. Picks first input
+   or workdir basename via runSubtitle() in src/lib/run-subtitle.ts. */
+.runs-dash__skill-group {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+}
+.runs-dash__skill-name {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.runs-dash__subtitle {
+  font-size: 11px;
+  opacity: 0.55;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 520px;
+  font-family: ui-monospace, SFMono-Regular, monospace;
+}
+.runs-dash__subtitle--empty {
+  font-style: italic;
+  font-family: inherit;
+  opacity: 0.35;
+}

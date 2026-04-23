@@ -6,6 +6,7 @@ import { alertDialog, confirmDialog } from "../lib/dialogs";
 import { TerminalLaunchButton } from "./TerminalLaunchButton";
 import { MeetingModal } from "./MeetingModal";
 import { meetingSessionIdsForRuns } from "../lib/run-meeting";
+import { runSubtitle } from "../lib/run-subtitle";
 // Lazy so the OutputAnnotator + markdown renderer only load when the
 // user opens the drawer — idle Runs tab stays lightweight.
 const RunDetailDrawer = lazy(() => import("./RunDetailDrawer"));
@@ -248,6 +249,9 @@ const RunRow = memo(function RunRow({
 
   const hasSession = !!run.session_id;
   const clickable = hasSession && !!onOpenSession;
+  // One-line descriptor so three rows of the same skill don't read as
+  // identical. Priority: first input → workdir basename → "(empty)".
+  const subtitle = runSubtitle(run);
 
   return (
     <tr
@@ -287,15 +291,28 @@ const RunRow = memo(function RunRow({
         />
       </td>
       <td className="runs-dash__cell">
-        {run.skill}
-        {hasSession && (
-          <span
-            className="runs-dash__session-chip"
-            title={`Session id: ${run.session_id}`}
+        <div className="runs-dash__skill-group">
+          <div className="runs-dash__skill-name">
+            {run.skill}
+            {hasSession && (
+              <span
+                className="runs-dash__session-chip"
+                title={`Session id: ${run.session_id}`}
+              >
+                → session
+              </span>
+            )}
+          </div>
+          <div
+            className={
+              "runs-dash__subtitle" +
+              (subtitle.empty ? " runs-dash__subtitle--empty" : "")
+            }
+            title={subtitle.title}
           >
-            → session
-          </span>
-        )}
+            {subtitle.text}
+          </div>
+        </div>
         {hasSession && (
           // The runs dashboard row is itself clickable; stopPropagation
           // on the wrapper prevents the row's onClick from firing when
