@@ -6632,3 +6632,52 @@ h5.block-card__heading, h6.block-card__heading { font-size: 11px; color: #8a92a0
   border-radius: 4px;
   opacity: 0.85;
 }
+
+/* ============================================================
+   Workforce project grouping (Sprint 3).
+   Sessions are collapsed by project_cwd so 5+ active projects
+   don't render as one giant flat scroll. <details> handles the
+   open/close state without React state machine overhead.
+   ============================================================ */
+.dashboard__group {
+  margin: 0 16px 12px;
+  padding: 0;
+}
+.dashboard__group + .dashboard__group {
+  border-top: 1px solid var(--border-subtle);
+  padding-top: 8px;
+}
+.dashboard__group-head {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  padding: 6px 0;
+  cursor: pointer;
+  list-style: none;
+  user-select: none;
+  font-size: var(--font-size-md);
+  color: var(--text-secondary);
+  transition: color var(--motion-fast) var(--easing-standard);
+}
+.dashboard__group-head::-webkit-details-marker { display: none; }
+.dashboard__group-head::before {
+  content: "▶";
+  font-size: 9px;
+  color: var(--text-muted);
+  transition: transform var(--motion-fast) var(--easing-standard);
+}
+.dashboard__group[open] > .dashboard__group-head::before {
+  transform: rotate(90deg);
+}
+.dashboard__group-head:hover { color: var(--text-primary); }
+.dashboard__group-name {
+  font-weight: 500;
+  letter-spacing: 0.02em;
+}
+.dashboard__group-counts {
+  font-size: var(--font-size-sm);
+  color: var(--text-muted);
+}
+.dashboard__group-awaiting {
+  color: var(--accent-bright);
+}

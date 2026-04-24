@@ -380,6 +380,37 @@ export default function SessionDashboard({
   // a fresh refresh swaps the array reference.
   const deferredLiveSessions = useDeferredValue(liveSessions);
 
+  /**
+   * Group live sessions by `project_cwd` so the Workforce surface
+   * scales past 5+ active projects without the cards becoming a
+   * scroll tax. Each group becomes a collapsible `<details>`; we
+   * pre-compute the open set so React can decide once per render
+   * which projects to expand by default:
+   *   - any awaiting_user session in the group  → open
+   *   - search query is non-empty                → open all
+   * Otherwise the group starts collapsed.
+   *
+   * Insertion order is preserved (newest-modified first via the
+   * filter step), so the most recently active project appears at
+   * the top.
+   */
+  const groupedByProject = useMemo(() => {
+    const groups = new Map<string, SessionInfo[]>();
+    for (const s of deferredLiveSessions) {
+      const key = s.project_cwd || "(unknown)";
+      const arr = groups.get(key);
+      if (arr) arr.push(s);
+      else groups.set(key, [s]);
+    }
+    return Array.from(groups.entries()).map(([cwd, items]) => ({
+      cwd,
+      items,
+      awaitingCount: items.filter((s) => s.awaiting_user).length,
+    }));
+  }, [deferredLiveSessions]);
+
+  const searchActive = deferredQuery.trim().length > 0;
+
   return (
     <div className="dashboard">
       <div className="dashboard__main">
@@ -454,36 +485,70 @@ export default function SessionDashboard({
             </div>
           )}
 
-        <div className="dashboard__grid">
-          {runningPipelineNodes.map((n) => (
-            <PipelineNodeCard
-              key={`pn-${n.id}`}
-              node={n}
-              onOpen={() => onJumpToPipeline?.()}
-            />
-          ))}
-          {deferredLiveSessions.map((s) => (
-            <SessionCard
-              key={s.id}
-              session={s}
-              isReviewed={reviewedMap[s.id] === s.modified_ms}
-              isPinned={pinnedSessionIds.has(s.id)}
-              selected={selected?.id === s.id}
-              synthSelected={attendeeIds.has(s.id)}
-              onOpen={openSession}
-              onPin={pinSession}
-              onUnpin={unpinSession}
-              onSynthToggle={(session) => {
-                setAttendeeIds((prev) => {
-                  const next = new Set(prev);
-                  if (next.has(session.id)) next.delete(session.id);
-                  else next.add(session.id);
-                  return next;
-                });
-              }}
-            />
-          ))}
-        </div>
+        {/* Pipeline-node cards stay ungrouped — they're the user's
+            currently-running canvas runs and aren't tied to a project
+            cwd. Render them in their own row above the project groups. */}
+        {runningPipelineNodes.length > 0 && (
+          <div className="dashboard__grid">
+            {runningPipelineNodes.map((n) => (
+              <PipelineNodeCard
+                key={`pn-${n.id}`}
+                node={n}
+                onOpen={() => onJumpToPipeline?.()}
+              />
+            ))}
+          </div>
+        )}
+
+        {groupedByProject.map(({ cwd, items, awaitingCount }) => {
+          const projectName =
+            cwd.split("/").filter(Boolean).slice(-1)[0] || cwd;
+          const open = searchActive || awaitingCount > 0;
+          return (
+            <details
+              key={cwd}
+              open={open}
+              className="dashboard__group"
+              title={cwd}
+            >
+              <summary className="dashboard__group-head">
+                <span className="dashboard__group-name">{projectName}</span>
+                <span className="dashboard__group-counts">
+                  {items.length} session{items.length === 1 ? "" : "s"}
+                  {awaitingCount > 0 && (
+                    <span className="dashboard__group-awaiting">
+                      {" · "}
+                      {awaitingCount} awaiting
+                    </span>
+                  )}
+                </span>
+              </summary>
+              <div className="dashboard__grid">
+                {items.map((s) => (
+                  <SessionCard
+                    key={s.id}
+                    session={s}
+                    isReviewed={reviewedMap[s.id] === s.modified_ms}
+                    isPinned={pinnedSessionIds.has(s.id)}
+                    selected={selected?.id === s.id}
+                    synthSelected={attendeeIds.has(s.id)}
+                    onOpen={openSession}
+                    onPin={pinSession}
+                    onUnpin={unpinSession}
+                    onSynthToggle={(session) => {
+                      setAttendeeIds((prev) => {
+                        const next = new Set(prev);
+                        if (next.has(session.id)) next.delete(session.id);
+                        else next.add(session.id);
+                        return next;
+                      });
+                    }}
+                  />
+                ))}
+              </div>
+            </details>
+          );
+        })}
       </div>
 
       {attendeeIds.size > 0 && (
