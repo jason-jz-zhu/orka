@@ -369,7 +369,13 @@ export default function SessionDashboard({
 
   const openSession = useCallback(
     (s: SessionInfo) => {
-      if (s.status !== "live") setSelected(s);
+      // Used to skip setSelected when status === "live" because the
+      // SessionCard click handler would jump focus to the external
+      // Terminal instead. That focus-steal is gone now that the
+      // drawer hosts an embedded xterm.js terminal — every status
+      // opens the same drawer, and the embedded-terminal section
+      // inside is the "continue this session" path for live ones.
+      setSelected(s);
       markReviewed(s.id, s.modified_ms);
     },
     [markReviewed]
