@@ -1,10 +1,15 @@
-import { useEffect, useState } from "react";
+import { lazy, Suspense, useEffect, useState } from "react";
 import type { RunRecord } from "../lib/runs";
 import { invokeCmd } from "../lib/tauri";
 import { alertDialog } from "../lib/dialogs";
 import { OutputAnnotator } from "./OutputAnnotator";
 import { RunChatPanel } from "./RunChatPanel";
 import { TerminalLaunchButton } from "./TerminalLaunchButton";
+// Lazy: the xterm bundle (~150KB) only loads when the user actually
+// opens the embedded-terminal section, not on every drawer render.
+const EmbeddedTerminal = lazy(() =>
+  import("./EmbeddedTerminal").then((m) => ({ default: m.EmbeddedTerminal })),
+);
 
 type ReconstructResult = {
   markdown: string;
@@ -202,8 +207,60 @@ export default function RunDetailDrawer({
             workdir={run.workdir}
             sourceTitle={run.skill}
           />
+          {run.session_id && (
+            <EmbeddedTerminalSection
+              runId={run.id}
+              sessionId={run.session_id}
+              workdir={run.workdir}
+            />
+          )}
         </div>
       </div>
     </div>
+  );
+}
+
+/**
+ * Collapsible section hosting an embedded xterm.js terminal that
+ * runs `claude --resume <session_id>` in-app. Mounted lazily — the
+ * PTY only spawns when the user opens this <details>, and gets
+ * killed when they close it (the EmbeddedTerminal cleanup runs on
+ * unmount via the React `key` flip below).
+ */
+function EmbeddedTerminalSection({
+  runId,
+  sessionId,
+  workdir,
+}: {
+  runId: string;
+  sessionId: string;
+  workdir?: string | null;
+}) {
+  const [open, setOpen] = useState(false);
+  return (
+    <details
+      className="run-drawer__terminal"
+      open={open}
+      onToggle={(e) => setOpen((e.target as HTMLDetailsElement).open)}
+    >
+      <summary className="run-drawer__terminal-summary">
+        ⌨ Continue this session in an embedded terminal
+        <span className="run-drawer__terminal-hint">
+          claude --resume {sessionId.slice(0, 8)}…
+        </span>
+      </summary>
+      {open && (
+        <div className="run-drawer__terminal-host">
+          <Suspense fallback={<div className="run-drawer__terminal-loading">Loading terminal…</div>}>
+            <EmbeddedTerminal
+              key={`${runId}-${sessionId}`}
+              cwd={workdir ?? null}
+              command="claude"
+              args={["--resume", sessionId]}
+            />
+          </Suspense>
+        </div>
+      )}
+    </details>
   );
 }

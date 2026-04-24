@@ -2,6 +2,7 @@ mod annotations;
 mod claude_gate;
 mod model_config;
 mod hire_chat;
+mod pty;
 mod session_brief;
 mod session_synthesis;
 mod skill_evolution;
@@ -1164,6 +1165,11 @@ pub fn run() {
             run_chat::load_run_chat,
             run_chat::save_run_chat_exchange,
             run_chat::clear_run_chat,
+            pty::pty_spawn,
+            pty::pty_write,
+            pty::pty_resize,
+            pty::pty_kill,
+            pty::pty_count,
             model_config::get_model_config,
             model_config::set_model_config,
             perf_smoke::perf_smoke_test,

@@ -39,3 +39,8 @@ sha2 = "0.10"
 clap = { version = "4", features = ["derive"] }
 chrono = "0.4"
 fs2 = "0.4"
+# Embedded terminal — cross-platform PTY (Wezterm team's library).
+# Powers src-tauri/src/pty.rs which the EmbeddedTerminal React component
+# attaches to via xterm.js. On Windows this internally uses ConPTY.
+portable-pty = "0.8"
+uuid = { version = "1", features = ["v4"] }
