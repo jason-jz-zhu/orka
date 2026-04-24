@@ -7,6 +7,7 @@ import { TerminalLaunchButton } from "./TerminalLaunchButton";
 import { MeetingModal } from "./MeetingModal";
 import { meetingSessionIdsForRuns } from "../lib/run-meeting";
 import { runSubtitle } from "../lib/run-subtitle";
+import { Icon } from "./Icon";
 // Lazy so the OutputAnnotator + markdown renderer only load when the
 // user opens the drawer — idle Runs tab stays lightweight.
 const RunDetailDrawer = lazy(() => import("./RunDetailDrawer"));
@@ -368,7 +369,9 @@ const RunRow = memo(function RunRow({
         <span
           className={`runs-dash__status-badge runs-dash__status-badge--${run.status}`}
         >
-          {run.status === "ok" ? "✓" : "✗"} {run.status}
+          <Icon name={run.status === "ok" ? "check" : "x"} size={12} />
+          {" "}
+          {run.status}
         </span>
       </td>
       <td className="runs-dash__cell">{run.trigger}</td>

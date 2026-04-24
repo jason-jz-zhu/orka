@@ -26,6 +26,7 @@ import {
   recentRunsForSkill,
   fmtLastDelivered,
 } from "../lib/skill-activity";
+import { Icon } from "./Icon";
 
 /** Prefix for schedules targeting an atomic skill (as opposed to a
  *  canvas pipeline). Lets runScheduledPipeline route to the right
@@ -882,7 +883,7 @@ export function SkillRunner({ skill, onOpenInCanvas, initialPrompt }: Props) {
                   title={new Date(ts).toLocaleString()}
                 >
                   <span className="skill-runner__trail-status">
-                    {r.status === "ok" ? "✓" : "✗"}
+                    <Icon name={r.status === "ok" ? "check" : "x"} size={12} />
                   </span>
                   <span className="skill-runner__trail-time">
                     {fmtLastDelivered(ts)}
