@@ -4924,54 +4924,47 @@ h5.block-card__heading, h6.block-card__heading { font-size: 11px; color: #8a92a0
   align-items: center;
   gap: 12px;
 }
+/* SkillRunner button hierarchy (Sprint 4: one hero action per screen).
+   Run is the primary purple CTA so the eye lands there immediately;
+   Schedule and Evolve drop to ghost so they read as secondary
+   options without competing visually. The old blue + amber + purple
+   tri-color toolbar was a hero-action-fight. */
 .skill-runner__run-btn {
-  background: #2a6df4;
-  color: #fff;
-  border: none;
+  background: var(--btn-primary-bg);
+  color: var(--btn-primary-fg);
+  border: 1px solid var(--btn-primary-bg);
   padding: 8px 16px;
-  border-radius: 6px;
+  border-radius: var(--radius-md);
   cursor: pointer;
-  font-size: 13px;
+  font-size: var(--font-size-md);
   font-weight: 600;
+  transition: background var(--motion-fast) var(--easing-standard);
 }
 .skill-runner__run-btn:hover:not(:disabled) {
-  background: #1f5acc;
+  background: var(--btn-primary-hover-bg);
+  border-color: var(--btn-primary-hover-bg);
 }
 .skill-runner__run-btn:disabled {
   opacity: 0.5;
   cursor: not-allowed;
 }
-.skill-runner__schedule-btn {
-  background: transparent;
-  color: #a8b0bf;
-  border: 1px solid #2b3038;
-  padding: 8px 14px;
-  border-radius: 6px;
-  cursor: pointer;
-  font-size: 12px;
-  font-weight: 500;
-  transition: background 0.12s ease, color 0.12s ease, border-color 0.12s ease;
-}
-.skill-runner__schedule-btn:hover {
-  background: rgba(251, 191, 36, 0.1);
-  color: #fbbf24;
-  border-color: rgba(251, 191, 36, 0.4);
-}
+.skill-runner__schedule-btn,
 .skill-runner__evolve-btn {
-  background: transparent;
-  color: #a8b0bf;
-  border: 1px solid #2b3038;
-  padding: 8px 14px;
-  border-radius: 6px;
+  background: var(--btn-ghost-bg);
+  color: var(--btn-ghost-fg);
+  border: 1px solid var(--border-default);
+  padding: 6px 12px;
+  border-radius: var(--radius-md);
   cursor: pointer;
-  font-size: 12px;
+  font-size: var(--font-size-base);
   font-weight: 500;
-  transition: background 0.12s ease, color 0.12s ease, border-color 0.12s ease;
+  transition: background var(--motion-fast) var(--easing-standard),
+              color var(--motion-fast) var(--easing-standard);
 }
+.skill-runner__schedule-btn:hover,
 .skill-runner__evolve-btn:hover {
-  background: rgba(168, 85, 247, 0.12);
-  color: #c4b5fd;
-  border-color: rgba(168, 85, 247, 0.4);
+  background: var(--btn-ghost-hover-bg);
+  color: var(--text-primary);
 }
 
 /* Evolution modal — summary / rationale / proposed markdown / apply */
