@@ -1,7 +1,6 @@
 import { memo } from "react";
 import type { SessionInfo } from "../lib/session-types";
 import { invokeCmd } from "../lib/tauri";
-import { alertDialog } from "../lib/dialogs";
 import { bump } from "../lib/perf";
 import { SessionBriefCard } from "./SessionBriefCard";
 
@@ -57,18 +56,6 @@ type Props = {
   onSynthToggle?: (s: SessionInfo) => void;
 };
 
-async function focusTerminal(path: string) {
-  try {
-    const msg = await invokeCmd<string>("focus_session_terminal", { path });
-    console.log(`[orka:focus] ${msg}`);
-  } catch (e) {
-    console.warn("[orka:focus] failed:", e);
-    await alertDialog(
-      `Could not find the terminal for this session:\n${e}\n\n` +
-        `Tip: the session must be running in Terminal.app or iTerm2 (macOS only).`
-    );
-  }
-}
 
 function SessionCardImpl({
   session,
@@ -209,14 +196,14 @@ function SessionCardImpl({
               });
               return;
             }
-            // Any live session — whether Claude is still generating OR
-            // awaiting user input — maps to "take me back to that terminal".
-            // Non-live (done / errored) sessions open the transcript drawer.
-            // Either way, notify the parent so the FOR-REVIEW → REVIEWED
-            // transition fires.
-            if (session.status === "live") {
-              focusTerminal(session.path);
-            }
+            // Used to also call focusTerminal() for live sessions to
+            // jump to the external Terminal.app/iTerm window —
+            // problem was, that focus-steal hid Orka and the drawer
+            // appeared to "not open". Now we just open the drawer in
+            // every case; the embedded-terminal section inside the
+            // drawer handles "continue this session" without leaving
+            // Orka. External-terminal users still have the
+            // ⌨ Terminal split-button in Logbook for that path.
             onOpen(session);
           }}
         >
