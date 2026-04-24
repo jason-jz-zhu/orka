@@ -1,0 +1,172 @@
+/* ============================================================
+   Orka design tokens — single source of truth for color, type,
+   spacing, motion, and button hierarchy. Imported once at the
+   top of App.css; component CSS uses var(--token) instead of
+   hard-coding hex values.
+
+   Goals (Sprint 1):
+   - Tighten visual coherence (matches "best workbench" framing)
+   - Make a future light-mode swap a one-file edit
+   - Replace 8+ infinite "polling pulse" animations with one
+     consolidated motion system that respects rest state.
+
+   See docs/TESTING-PLAN.md for the comparison-doc backing this.
+   ============================================================ */
+
+:root {
+  /* ---------- Surfaces (3 layers, dark theme) ---------- */
+  --surface-0: #0a0d12;   /* deepest — code, pre, modal-input bg */
+  --surface-1: #0f1115;   /* app bg, drawer bg */
+  --surface-2: #161a20;   /* card / menu bg */
+  --surface-3: rgba(255, 255, 255, 0.04); /* hover / subtle row */
+
+  /* ---------- Borders ---------- */
+  --border-subtle: rgba(255, 255, 255, 0.06);
+  --border-default: #22262e;
+  --border-strong: #2b3038;
+
+  /* ---------- Text ---------- */
+  --text-primary: #e6e6e6;
+  --text-secondary: #cbd5e1;
+  --text-tertiary: #94a3b8;
+  --text-muted: #64748b;
+  --text-faint: #8a92a0;
+
+  /* ---------- Accent (operator narrative) ---------- */
+  --accent: #a855f7;          /* primary action, highlights */
+  --accent-bright: #c4b5fd;   /* on-accent text */
+  --accent-soft: rgba(168, 85, 247, 0.12); /* soft tint bg */
+  --accent-edge: rgba(168, 85, 247, 0.3);  /* tinted border */
+
+  /* ---------- Status (semantic) ---------- */
+  --status-ok: #4ade80;
+  --status-ok-soft: rgba(74, 222, 128, 0.12);
+  --status-warn: #fbbf24;
+  --status-warn-soft: rgba(251, 191, 36, 0.12);
+  --status-err: #ef4444;
+  --status-err-soft: rgba(239, 68, 68, 0.08);
+  --status-info: #3b82f6;
+  --status-info-soft: rgba(59, 130, 246, 0.12);
+
+  /* ---------- Spacing (8pt-ish grid) ---------- */
+  --space-0: 2px;
+  --space-1: 4px;
+  --space-2: 6px;
+  --space-3: 10px;
+  --space-4: 14px;
+  --space-5: 20px;
+  --space-6: 28px;
+
+  /* ---------- Radii ---------- */
+  --radius-sm: 4px;
+  --radius-md: 6px;
+  --radius-lg: 8px;
+  --radius-pill: 99px;
+
+  /* ---------- Shadows ---------- */
+  --shadow-sm: 0 2px 6px rgba(0, 0, 0, 0.25);
+  --shadow-md: 0 6px 20px rgba(0, 0, 0, 0.35);
+  --shadow-lg: 0 16px 60px rgba(0, 0, 0, 0.6);
+
+  /* ---------- Motion ---------- */
+  --motion-fast: 80ms;       /* hover/state flips */
+  --motion-base: 160ms;      /* drawer slide, menu in */
+  --motion-slow: 260ms;      /* large reveals */
+  --easing-standard: cubic-bezier(0.2, 0.8, 0.2, 1);
+
+  /* ---------- Button hierarchy (Sprint 4) ---------- */
+  /* One primary per surface. Other actions step down to
+     secondary (default-ish) or ghost (transparent). */
+  --btn-primary-bg: var(--accent);
+  --btn-primary-hover-bg: #9333ea;
+  --btn-primary-fg: #fff;
+
+  --btn-secondary-bg: var(--surface-2);
+  --btn-secondary-hover-bg: var(--surface-3);
+  --btn-secondary-fg: var(--text-primary);
+  --btn-secondary-border: var(--border-default);
+
+  --btn-ghost-bg: transparent;
+  --btn-ghost-hover-bg: var(--surface-3);
+  --btn-ghost-fg: var(--text-secondary);
+
+  --btn-danger-bg: var(--status-err);
+  --btn-danger-hover-bg: #dc2626;
+
+  /* ---------- Typography ---------- */
+  --font-mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
+  --font-size-xs: 10px;
+  --font-size-sm: 11px;
+  --font-size-base: 12px;
+  --font-size-md: 13px;
+  --font-size-lg: 14px;
+  --font-size-xl: 18px;
+  --line-height-tight: 1.25;
+  --line-height-normal: 1.55;
+}
+
+/* ============================================================
+   Consolidated motion primitives.
+   Replaces 4+ ad-hoc "infinite pulse" keyframes with a single
+   subtle one-shot fade that signals state transitions instead
+   of constantly animating. Live status indicators that genuinely
+   need a heartbeat keep using the existing `pulse` keyframe in
+   App.css; everything else moves to fade-in.
+   ============================================================ */
+@keyframes orka-fade-in {
+  from { opacity: 0; transform: translateY(2px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+@keyframes orka-fade-bg {
+  from { background-color: var(--accent-soft); }
+  to   { background-color: transparent; }
+}
+
+/* ============================================================
+   Button hierarchy utility classes — opt-in. Existing buttons
+   keep their bespoke classes; new components and Sprint 4
+   refactors use these for one-primary-per-screen discipline.
+   ============================================================ */
+.btn {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: 4px 10px;
+  border-radius: var(--radius-sm);
+  font-size: var(--font-size-base);
+  font-family: inherit;
+  cursor: pointer;
+  border: 1px solid transparent;
+  transition: background var(--motion-fast) var(--easing-standard);
+}
+.btn:disabled { opacity: 0.5; cursor: not-allowed; }
+
+.btn--primary {
+  background: var(--btn-primary-bg);
+  color: var(--btn-primary-fg);
+  border-color: var(--btn-primary-bg);
+}
+.btn--primary:hover:not(:disabled) { background: var(--btn-primary-hover-bg); }
+
+.btn--secondary {
+  background: var(--btn-secondary-bg);
+  color: var(--btn-secondary-fg);
+  border-color: var(--btn-secondary-border);
+}
+.btn--secondary:hover:not(:disabled) { background: var(--btn-secondary-hover-bg); }
+
+.btn--ghost {
+  background: var(--btn-ghost-bg);
+  color: var(--btn-ghost-fg);
+}
+.btn--ghost:hover:not(:disabled) {
+  background: var(--btn-ghost-hover-bg);
+  color: var(--text-primary);
+}
+
+.btn--danger {
+  background: var(--btn-danger-bg);
+  color: #fff;
+  border-color: var(--btn-danger-bg);
+}
+.btn--danger:hover:not(:disabled) { background: var(--btn-danger-hover-bg); }

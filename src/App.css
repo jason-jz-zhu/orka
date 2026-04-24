@@ -1,7 +1,9 @@
+@import "./styles/tokens.css";
+
 :root {
   font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
-  color: #e6e6e6;
-  background: #0f1115;
+  color: var(--text-primary);
+  background: var(--surface-1);
 }
 
 html, body, #root { margin: 0; height: 100%; }
@@ -124,12 +126,13 @@ html, body, #root { margin: 0; height: 100%; }
   font-size: 11px !important;
   cursor: pointer;
   margin-left: 6px !important;
-  animation: toolbar-skip-pulse 1.2s ease-in-out infinite;
+  /* Was infinite-pulse — too "alarmed" for a passive skip
+     button. Resting state is calm; hover provides the "I'm
+     interactive" signal. */
 }
-.toolbar__skip:hover { background: #5a472b !important; }
-@keyframes toolbar-skip-pulse {
-  0%, 100% { box-shadow: 0 0 0 0 rgba(255, 201, 122, 0.4); }
-  50%      { box-shadow: 0 0 0 6px rgba(255, 201, 122, 0); }
+.toolbar__skip:hover {
+  background: #5a472b !important;
+  box-shadow: 0 0 0 6px rgba(255, 201, 122, 0.18);
 }
 
 .toolbar__active-pipeline {
@@ -3269,25 +3272,17 @@ h5.block-card__heading, h6.block-card__heading { font-size: 11px; color: #8a92a0
 .chat-node--agent { border-color: #3a2a5a; }
 .chat-node--agent .chat-node__header { color: #b29aff; }
 
-/* Run-state visual feedback */
+/* Run-state visual feedback. Was an infinite glow pulse —
+   replaced with a static blue ring + a one-shot fade-in on
+   transition into running. Heartbeat is conveyed by the
+   single "⋯ streaming" badge inside the node, not by a 60fps
+   shadow oscillation. */
 .chat-node--running {
   border-color: #2a6df4 !important;
   box-shadow:
-    0 0 0 1px rgba(42, 109, 244, 0.35),
-    0 4px 18px rgba(42, 109, 244, 0.25) !important;
-  animation: node-pulse 1.6s ease-in-out infinite;
-}
-@keyframes node-pulse {
-  0%, 100% {
-    box-shadow:
-      0 0 0 1px rgba(42, 109, 244, 0.35),
-      0 4px 18px rgba(42, 109, 244, 0.25);
-  }
-  50% {
-    box-shadow:
-      0 0 0 2px rgba(42, 109, 244, 0.55),
-      0 6px 28px rgba(42, 109, 244, 0.45);
-  }
+    0 0 0 1px rgba(42, 109, 244, 0.45),
+    0 4px 18px rgba(42, 109, 244, 0.3) !important;
+  animation: orka-fade-in var(--motion-base) var(--easing-standard);
 }
 .chat-node--done {
   border-color: #1b7f4c !important;
@@ -3876,8 +3871,12 @@ h5.block-card__heading, h6.block-card__heading { font-size: 11px; color: #8a92a0
   border-color: #3b82f6;
 }
 
-/* Batch prewarm banner — offered when any installed skill has no
-   examples:. One-click kicks off the Sonnet run that fills them in. */
+/* Batch prewarm banner — feature retired (per-skill "✨ Suggest
+   examples" on the runner replaced it). The CSS rules + keyframes
+   below are dead and kept only briefly for safety; remove on next
+   pass. The infinite-pulse `prewarm-pulse` keyframe was a top
+   contributor to the "always polling" feel and is no longer
+   referenced by any DOM. */
 .skills-tab__prewarm {
   margin: 0 10px 6px !important;
   padding: 6px 10px !important;
@@ -3908,16 +3907,7 @@ h5.block-card__heading, h6.block-card__heading { font-size: 11px; color: #8a92a0
   align-items: center;
   gap: 6px;
 }
-.skills-tab__prewarm-dot {
-  display: inline-block;
-  animation: prewarm-pulse 0.9s ease-in-out infinite;
-  font-size: 16px;
-  line-height: 0.5;
-}
-@keyframes prewarm-pulse {
-  0%, 100% { opacity: 0.3; }
-  50% { opacity: 1; }
-}
+/* prewarm-dot + keyframe deleted — dead since the banner retired. */
 
 .skills-tab__list {
   flex: 1 1 0;
