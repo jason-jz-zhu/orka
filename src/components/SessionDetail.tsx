@@ -1,8 +1,13 @@
-import { useEffect, useRef, useState } from "react";
+import { lazy, Suspense, useEffect, useRef, useState } from "react";
 import { invokeCmd, listenEvent } from "../lib/tauri";
 import type { SessionInfo, SessionLine } from "../lib/session-types";
 import { useGraph } from "../lib/graph-store";
 import { alertDialog } from "../lib/dialogs";
+// Lazy: xterm bundle (~150KB) only loads when the user opens the
+// embedded-terminal details below; keeps default drawer cost flat.
+const EmbeddedTerminal = lazy(() =>
+  import("./EmbeddedTerminal").then((m) => ({ default: m.EmbeddedTerminal })),
+);
 
 type Props = {
   session: SessionInfo | null;
@@ -144,7 +149,45 @@ export default function SessionDetail({ session }: Props) {
             <span className="session-node__text">{l.text}</span>
           </div>
         ))}
+        <SessionDetailTerminal session={session} />
       </div>
     </div>
+  );
+}
+
+/**
+ * Same lazy "Continue this session in an embedded terminal" pattern
+ * we already use in RunDetailDrawer. Symmetry: clicking Open on a
+ * Workforce SessionCard now reaches the same in-app terminal that
+ * Logbook's drawer does, so users don't have to bounce to external
+ * Terminal.app to resume.
+ */
+function SessionDetailTerminal({ session }: { session: SessionInfo }) {
+  const [open, setOpen] = useState(false);
+  return (
+    <details
+      className="run-drawer__terminal"
+      open={open}
+      onToggle={(e) => setOpen((e.target as HTMLDetailsElement).open)}
+    >
+      <summary className="run-drawer__terminal-summary">
+        ⌨ Continue in an embedded terminal
+        <span className="run-drawer__terminal-hint">
+          claude --resume {session.id.slice(0, 8)}…
+        </span>
+      </summary>
+      {open && (
+        <div className="run-drawer__terminal-host">
+          <Suspense fallback={<div className="run-drawer__terminal-loading">Loading terminal…</div>}>
+            <EmbeddedTerminal
+              key={session.id}
+              cwd={session.project_cwd}
+              command="claude"
+              args={["--resume", session.id]}
+            />
+          </Suspense>
+        </div>
+      )}
+    </details>
   );
 }
